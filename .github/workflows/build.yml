@@ -1,0 +1,169 @@
+name: 編譯改裝版
+
+# 每天檢查官方 0c-biggo/0c-ime 的最新版本；還沒有對應的改裝版就套用 patches/ 編譯，發布成 Release。
+on:
+  schedule:
+    - cron: "17 2 * * *" # 台灣時間每天 10:17
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "已經有同版本也重新編譯"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: ["patches/**", "MOD_VERSION", "docs/**", ".github/workflows/build.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/0c-biggo/0c-ime
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      skip: ${{ steps.plan.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          tag=$(git ls-remote --tags --refs "$UPSTREAM" 'v*' | awk -F/ '{print $3}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          mod=$(tr -d '[:space:]' < MOD_VERSION)
+          version="${tag#v}-mod.${mod}"
+          skip=false
+          if gh release view "v$version" >/dev/null 2>&1; then
+            if [ "$FORCE" = "true" ]; then gh release delete "v$version" --yes --cleanup-tag; else skip=true; fi
+          fi
+          echo "官方最新：$tag；改裝版：$version；略過：$skip"
+          { echo "tag=$tag"; echo "version=$version"; echo "skip=$skip"; } >> "$GITHUB_OUTPUT"
+      # 排程的工作流程在儲存庫 60 天沒有活動時會被 GitHub 停用；超過 50 天沒有提交就推一個空提交。
+      - name: 保持排程啟用
+        if: github.event_name == 'schedule'
+        run: |
+          last=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - last )) -gt $(( 50 * 86400 )) ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "保持排程啟用"
+            git push
+          fi
+
+  prepare:
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mod
+      - name: 取得官方原始碼並套用改裝
+        run: |
+          git clone --quiet --depth 1 --branch "$TAG" "$UPSTREAM" src
+          cd src
+          git -c user.name=mod -c user.email=mod@localhost am --3way ../mod/patches/*.patch
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 測試改動到的部分
+        working-directory: src
+        run: go test ./core/session/ ./core/engine/ ./internal/settings/ ./cmd/0c-update/ ./cmd/0c-server/
+      - name: 下載字典
+        working-directory: src
+        run: python3 scripts/fetch_assets.py --release "$TAG" --no-models
+      - name: 準備神經選字（Python 與模型）
+        working-directory: src
+        run: python3 scripts/prepare_neural.py --platform windows-amd64 --dictionary assets/data --out ../neural
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets
+          path: |
+            src/assets/data
+            neural
+          retention-days: 3
+
+  build:
+    needs: [plan, prepare]
+    runs-on: windows-2025
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      PYTHONUTF8: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mod
+      - name: 取得官方原始碼並套用改裝
+        run: |
+          git config --global core.autocrlf false
+          git clone --quiet --depth 1 --branch "$TAG" "$UPSTREAM" src
+          cd src
+          git -c user.name=mod -c user.email=mod@localhost am --3way ../mod/patches/*.patch
+      - uses: actions/download-artifact@v4
+        with:
+          name: assets
+          path: artifact
+      - name: 放好字典與神經選字
+        run: |
+          mkdir -p src/assets
+          mv artifact/src/assets/data src/assets/data
+          mv artifact/neural neural
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Rust 工具鏈
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc i686-pc-windows-msvc
+          cargo --version
+      - name: 編譯設定程式
+        working-directory: src
+        run: python scripts/build_settings_windows.py --version "$VERSION" --out build/settings
+      - name: 編譯並打包
+        working-directory: src
+        run: |
+          python scripts/package_windows.py --preview --version "$VERSION" \
+            --data assets/data --neural ../neural --settings build/settings/windows-amd64 \
+            --release-docs ../mod/docs --out ../out
+          ls -la ../out
+      - name: 發布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          靈犀注音 ${TAG} ＋ 改裝 ${VERSION##*-}
+
+          - 切換中英時結束組字
+          - 一律從英文開始的程式
+
+          安裝：在 PowerShell 執行 \`install-mod.ps1\`（見儲存庫首頁說明）。
+          EOF
+          gh release create "v$VERSION" out/*.zip out/*.sha256 --repo "$GITHUB_REPOSITORY" \
+            --title "改裝版 $VERSION" --notes-file notes.md

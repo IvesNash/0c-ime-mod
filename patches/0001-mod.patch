@@ -1,0 +1,892 @@
+From 5a22c3f1dbb99a9efce30ed764cf7958fe338912 Mon Sep 17 00:00:00 2001
+From: 0c-ime-mod <mod@localhost>
+Date: Wed, 21 Oct 2026 14:43:56 +0800
+Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
+ =?UTF-8?q?=E4=B8=AD=E8=8B=B1=E6=99=82=E7=B5=90=E6=9D=9F=E7=B5=84=E5=AD=97?=
+ =?UTF-8?q?=E3=80=81=E4=B8=80=E5=BE=8B=E5=BE=9E=E8=8B=B1=E6=96=87=E9=96=8B?=
+ =?UTF-8?q?=E5=A7=8B=E7=9A=84=E7=A8=8B=E5=BC=8F?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- 引擎：EndOnToggle（預設開）單按 Shift 切換時送出已組好的字、清掉沒打完的注音，組字區關閉
+- 外殼：english_apps 清單裡的程式從英文開始，英文模式不做自動補字
+- 設定：兩項存在 settings.json 的保留欄位，官方版會原樣保留
+- 設定程式：「中英切換（改裝）」卡片與「從開著的程式挑選」
+---
+ cmd/0c-server/main.go                     |   4 +
+ cmd/0c-update/main.go                     |   3 +
+ core/engine/engine.go                     |   2 +
+ core/session/mod_toggle.go                |  19 +++
+ core/session/mod_toggle_test.go           |  84 +++++++++++++
+ core/session/session.go                   |   6 +
+ internal/settings/mod.go                  | 137 ++++++++++++++++++++++
+ internal/settings/mod_test.go             |  50 ++++++++
+ internal/settings/settings.go             |   4 +
+ internal/settings/settings_test.go        |   2 +-
+ platforms/settings/build.rs               |   3 +-
+ platforms/settings/capabilities/main.json |   1 +
+ platforms/settings/src/main.rs            |   4 +-
+ platforms/settings/src/modapps.rs         |  57 +++++++++
+ platforms/settings/src/updater.rs         |  11 +-
+ platforms/settings/ui/app.js              |   4 +-
+ platforms/settings/ui/index.html          |   2 +
+ platforms/settings/ui/mod.css             |  15 +++
+ platforms/settings/ui/mod.js              |  83 +++++++++++++
+ platforms/windows/tsf/src/lib.rs          |   1 +
+ platforms/windows/tsf/src/modapps.rs      |  31 +++++
+ platforms/windows/tsf/src/service.rs      |   4 +-
+ platforms/windows/tsf/src/session.rs      |  21 ++++
+ 23 files changed, 541 insertions(+), 7 deletions(-)
+ create mode 100644 core/session/mod_toggle.go
+ create mode 100644 core/session/mod_toggle_test.go
+ create mode 100644 internal/settings/mod.go
+ create mode 100644 internal/settings/mod_test.go
+ create mode 100644 platforms/settings/src/modapps.rs
+ create mode 100644 platforms/settings/ui/mod.css
+ create mode 100644 platforms/settings/ui/mod.js
+ create mode 100644 platforms/windows/tsf/src/modapps.rs
+
+diff --git a/cmd/0c-server/main.go b/cmd/0c-server/main.go
+index b2a3c83..781700b 100644
+--- a/cmd/0c-server/main.go
++++ b/cmd/0c-server/main.go
+@@ -140,6 +140,7 @@ func serve() string {
+ 	eng.Fuzzy = config.FuzzyConfig()
+ 	eng.MixedInput = config.MixedInput
+ 	eng.EnglishAutocomplete = config.EnglishAutocomplete
++	eng.EndOnToggle = config.EndOnToggle() // 0c-ime-mod
+ 	eng.CandidateBeforeCursor = config.CandidateCursor == "before"
+ 	eng.EmojiShortcut = config.EmojiShortcut
+ 	eng.EmojiEqualsFirst = config.EmojiEqualsFirst
+@@ -426,6 +427,9 @@ func serve() string {
+ 	if punctuationSource != "" {
+ 		srv.Info["punctuation_source"] = punctuationSource
+ 	}
++	// 0c-ime-mod：外殼依這兩項決定切換行為的顯示與哪些程式從英文開始（執行檔名稱以 | 分隔）。
++	srv.Info["end_composition_on_toggle"] = fmt.Sprint(config.EndOnToggle())
++	srv.Info["english_apps"] = config.EnglishAppsJoined()
+ 	srv.Info["english_words"] = fmt.Sprint(eng.English.Len())
+ 	srv.Info["english_pack"] = eng.EnglishPack
+ 	if eng.EnglishPack == "" {
+diff --git a/cmd/0c-update/main.go b/cmd/0c-update/main.go
+index 1538e24..14581d1 100644
+--- a/cmd/0c-update/main.go
++++ b/cmd/0c-update/main.go
+@@ -95,6 +95,9 @@ func listSettings(w io.Writer, r settings.Report, path string) {
+ 	for _, p := range fuzzy.Pairs() {
+ 		fmt.Fprintf(w, "fuzzy-%s=%s（%s 模糊音：off 關閉；select 開候選時合併近音；auto 另在語境明顯支持近音時自動改字，實驗）\n", p.ID(), fuzzyConfig.Mode(p), p.Symbols())
+ 	}
++	// 0c-ime-mod
++	fmt.Fprintf(w, "%s=%s（切換中英時結束組字）\n%s=%s（一律從英文開始的程式，以 | 分隔）\n",
++		settings.ModEndOnToggleItem, onOff(s.EndOnToggle()), settings.ModEnglishAppsItem, s.EnglishAppsJoined())
+ }
+ 
+ func isJSONFlag(arg string) bool { return arg == "-json" || arg == "--json" }
+diff --git a/core/engine/engine.go b/core/engine/engine.go
+index 43aff24..c82f4f6 100644
+--- a/core/engine/engine.go
++++ b/core/engine/engine.go
+@@ -39,6 +39,7 @@ type Engine struct {
+ 	CapsLockEnglish       bool              // 「Caps Lock 開著時直接打英文」開著時由宿主設定（#173）；零值時 caps_lock 請求不起作用。
+ 	Fuzzy                 fuzzy.Config      // 使用者逐對啟用的模糊音；零值全部關閉。
+ 	EnglishAutocomplete   bool
++	EndOnToggle           bool                // 0c-ime-mod：切換中英時結束組字
+ 	MixedInput            bool                // opt-in bilingual keys; disabled preserves legacy behavior.
+ 	English               *english.Dictionary // nil uses the authored prototype vocabulary.
+ 	EnglishPack           string              // host-supplied pack version for diagnostics; empty means prototype.
+@@ -98,6 +99,7 @@ func (e *Engine) OpenSession() uint64 {
+ 	e.sessions[e.next].CapsLockEnglish = e.CapsLockEnglish
+ 	e.sessions[e.next].Fuzzy = e.Fuzzy
+ 	e.sessions[e.next].EnglishAutocomplete = e.EnglishAutocomplete
++	e.sessions[e.next].EndOnToggle = e.EndOnToggle // 0c-ime-mod
+ 	e.sessions[e.next].MixedInput = e.MixedInput
+ 	e.sessions[e.next].EmojiShortcut = e.EmojiShortcut
+ 	e.sessions[e.next].EmojiEqualsFirst = e.EmojiEqualsFirst
+diff --git a/core/session/mod_toggle.go b/core/session/mod_toggle.go
+new file mode 100644
+index 0000000..229893c
+--- /dev/null
++++ b/core/session/mod_toggle.go
+@@ -0,0 +1,19 @@
++package session
++
++// 0c-ime-mod：切換中英時結束組字。
++//
++// 原本的做法（#90）只清掉沒打完的注音，組字區照樣開著；切到英文後打的字母會接進組字區，
++// 在 After Effects 這類沒有文字框的畫面上就是快捷鍵全被懸浮的組字視窗吃掉。
++// 開啟 EndOnToggle 時，單按 Shift 切換先清掉沒打完的注音、關掉候選，再把已組好的字送出，
++// 組字區關閉，之後的按鍵照模式直接交給程式。
++
++// modEndOnToggle 回傳要送出的文字；沒有組字時什麼都不做。
++func (s *Session) modEndOnToggle() string {
++	s.clearPendingZhuyin()
++	s.cand = nil
++	s.toggleStash = nil
++	if !s.composing() {
++		return ""
++	}
++	return s.commit()
++}
+diff --git a/core/session/mod_toggle_test.go b/core/session/mod_toggle_test.go
+new file mode 100644
+index 0000000..49d42f0
+--- /dev/null
++++ b/core/session/mod_toggle_test.go
+@@ -0,0 +1,84 @@
++package session
++
++import (
++	"testing"
++
++	"github.com/0c-biggo/0c-ime/core/proto"
++)
++
++// 0c-ime-mod：切換中英時結束組字。
++
++func TestModToggleEndsEnglishLiteralComposition(t *testing.T) {
++	// 在 AE 誤按 P、V、W（中英混打判成英文字），切英文後不能再讓快捷鍵進組字區。
++	s := mixedSession()
++	s.EndOnToggle = true
++	for _, k := range []string{"p", "v", "w"} {
++		key(s, k)
++	}
++	snap := s.Handle(proto.Request{Type: proto.Toggle})
++	if snap.Mode != proto.ModeEnglish || snap.Commit != "pvw" || s.composing() {
++		t.Fatalf("切換應送出組字並關閉組字區：%+v", snap)
++	}
++	if next := key(s, "v"); next.Handled {
++		t.Fatalf("切到英文後的按鍵應交給程式：%+v", next)
++	}
++}
++
++func TestModToggleDropsPendingKeepsComposed(t *testing.T) {
++	s := newSession()
++	s.EndOnToggle = true
++	pendingAfterWo(s) // 我 + ㄒㄧㄤ
++	snap := s.Handle(proto.Request{Type: proto.Toggle})
++	if snap.Commit != "我" || snap.Text() != "" || snap.Mode != proto.ModeEnglish {
++		t.Fatalf("送出已組好的字、丟掉沒打完的注音：%+v", snap)
++	}
++	// 立即切回不放回注音（已經送出）。
++	back := s.Handle(proto.Request{Type: proto.Toggle, Restore: true})
++	if back.Text() != "" || back.Mode != proto.ModeZhuyin || back.Commit != "" {
++		t.Fatalf("切回注音：%+v", back)
++	}
++}
++
++func TestModToggleOnlyPendingCommitsNothing(t *testing.T) {
++	s := mixedSession()
++	s.EndOnToggle = true
++	key(s, "p") // ㄣ
++	snap := s.Handle(proto.Request{Type: proto.Toggle})
++	if snap.Commit != "" || snap.Text() != "" || s.composing() {
++		t.Fatalf("只有沒打完的注音：清掉、不送出：%+v", snap)
++	}
++}
++
++func TestModToggleFromEnglishCommitsTypedText(t *testing.T) {
++	s := newSession()
++	s.EndOnToggle = true
++	typeSyl(s, "ㄨㄛˇ")
++	s.Handle(proto.Request{Type: proto.Toggle}) // 送出「我」
++	key(s, "a")                                 // 英文模式沒在組字：交給程式
++	if s.composing() {
++		t.Fatal("英文模式沒在組字時字母不進組字區")
++	}
++	if snap := s.Handle(proto.Request{Type: proto.Toggle}); snap.Mode != proto.ModeZhuyin || snap.Commit != "" {
++		t.Fatalf("切回注音：%+v", snap)
++	}
++}
++
++func TestModToggleOffKeepsOriginalBehavior(t *testing.T) {
++	s := mixedSession()
++	for _, k := range []string{"p", "v", "w"} {
++		key(s, k)
++	}
++	if snap := s.Handle(proto.Request{Type: proto.Toggle}); snap.Commit != "" || snap.Text() != "pvw" {
++		t.Fatalf("關閉時維持原本做法：%+v", snap)
++	}
++}
++
++func TestModModeRequestUnaffected(t *testing.T) {
++	// 外殼設定模式（換欄位、從英文開始的程式）不是使用者切換，不送出組字。
++	s := newSession()
++	s.EndOnToggle = true
++	pendingAfterWo(s)
++	if snap := s.Handle(proto.Request{Type: proto.Mode, On: true}); snap.Commit != "" {
++		t.Fatalf("mode 請求不送出：%+v", snap)
++	}
++}
+diff --git a/core/session/session.go b/core/session/session.go
+index 0e8dcf7..07b57a0 100644
+--- a/core/session/session.go
++++ b/core/session/session.go
+@@ -100,6 +100,7 @@ type Session struct {
+ 	Simplified *zhconv.Converter
+ 	// MixedInput is opt-in; English is a shared, immutable vocabulary.
+ 	EnglishAutocomplete   bool
++	EndOnToggle           bool // 0c-ime-mod：切換中英時結束組字（mod_toggle.go）
+ 	MixedInput            bool
+ 	English               *english.Dictionary
+ 	EmojiShortcut         string
+@@ -348,6 +349,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
+ 		}
+ 		// 使用者自己切換或外殼設定模式之後，關掉 Caps Lock 不再改變模式（#173）。
+ 		s.capsEnglish = false
++		if r.Type == proto.Toggle && s.EndOnToggle { // 0c-ime-mod
++			commit = s.modEndOnToggle()
++			s.setMode(english, false, nil)
++			break
++		}
+ 		s.setMode(english, r.Type == proto.Toggle && r.Restore, stash)
+ 	case proto.CapsLock:
+ 		handled, commit = s.capsLockChanged(r.On)
+diff --git a/internal/settings/mod.go b/internal/settings/mod.go
+new file mode 100644
+index 0000000..7a85edc
+--- /dev/null
++++ b/internal/settings/mod.go
+@@ -0,0 +1,137 @@
++package settings
++
++// 0c-ime-mod：個人改裝的兩項設定，存在設定檔的保留成員（extra）裡，不改原本的結構與讀寫流程。
++// 官方版讀到這兩個鍵會當成不認得的欄位原樣保留，所以裝回官方版、再裝回改裝版時設定不會遺失。
++
++import (
++	"encoding/json"
++	"fmt"
++	"slices"
++	"strings"
++)
++
++const (
++	modEndOnToggleKey  = "end_composition_on_toggle" // 設定檔欄位
++	modEnglishAppsKey  = "english_apps"
++	ModEndOnToggleItem = "end-composition-on-toggle" // 命令列／設定程式的鍵
++	ModEnglishAppsItem = "english-apps"
++	modMaxApps         = 64
++	modMaxAppLen       = 128
++)
++
++func (s Settings) modExtra() map[string]json.RawMessage {
++	kept := map[string]json.RawMessage{}
++	if s.extra != "" {
++		_ = json.Unmarshal([]byte(s.extra), &kept)
++	}
++	return kept
++}
++
++func (s *Settings) modSetExtra(key string, value any) error {
++	kept := s.modExtra()
++	raw, err := json.Marshal(value)
++	if err != nil {
++		return err
++	}
++	kept[key] = raw
++	b, err := json.Marshal(kept)
++	if err != nil {
++		return err
++	}
++	s.extra = string(b)
++	return nil
++}
++
++// EndOnToggle：單按 Shift 切換中英時結束組字（送出已組好的字、清掉沒打完的注音）。預設開啟。
++func (s Settings) EndOnToggle() bool {
++	raw, ok := s.modExtra()[modEndOnToggleKey]
++	if !ok {
++		return true
++	}
++	var v bool
++	if json.Unmarshal(raw, &v) != nil {
++		return true
++	}
++	return v
++}
++
++// EnglishApps：一律從英文開始、不做英文自動補字的程式（執行檔名稱，不分大小寫）。
++func (s Settings) EnglishApps() []string {
++	raw, ok := s.modExtra()[modEnglishAppsKey]
++	if !ok {
++		return nil
++	}
++	var list []string
++	if json.Unmarshal(raw, &list) != nil {
++		return nil
++	}
++	return normalizeApps(list)
++}
++
++// normalizeApps 去掉空白、路徑與重複（不分大小寫），保留原本的大小寫與順序。
++func normalizeApps(list []string) []string {
++	var out []string
++	seen := map[string]bool{}
++	for _, name := range list {
++		name = strings.TrimSpace(name)
++		if i := strings.LastIndexAny(name, `\/`); i >= 0 {
++			name = name[i+1:]
++		}
++		if name == "" || len(name) > modMaxAppLen || strings.ContainsAny(name, "|\"<>:*?\t\r\n") {
++			continue
++		}
++		key := strings.ToLower(name)
++		if seen[key] {
++			continue
++		}
++		seen[key] = true
++		out = append(out, name)
++		if len(out) == modMaxApps {
++			break
++		}
++	}
++	return out
++}
++
++func modSpecs() []spec {
++	return []spec{
++		{ModEndOnToggleItem, "切換中英時結束組字", "切換時關掉懸浮視窗，之後按鍵直接給程式", "on", []string{"on", "off"},
++			func(s Settings) string { return onOff(s.EndOnToggle()) }},
++		// 值是以 | 分隔的執行檔名稱；設定程式另外畫成清單。
++		{ModEnglishAppsItem, "一律從英文開始的程式", "這些程式一開就是英文，打中文再按右 Shift", "", []string{""},
++			func(s Settings) string { return strings.Join(s.EnglishApps(), "|") }},
++	}
++}
++
++// modSet 處理改裝的兩項；不是這兩項時回 handled=false，交回原本的 Set。
++func (s *Settings) modSet(key, value string) (bool, error) {
++	switch key {
++	case ModEndOnToggleItem:
++		if value != "on" && value != "off" {
++			return true, &SetError{Code: CodeInvalidValue, Key: key, Msg: key + " 只接受 on 或 off"}
++		}
++		return true, s.modSetExtra(modEndOnToggleKey, value == "on")
++	case ModEnglishAppsItem:
++		var list []string
++		if strings.TrimSpace(value) != "" && value != "none" {
++			list = strings.Split(value, "|")
++		}
++		apps := normalizeApps(list)
++		if len(list) > 0 && len(apps) == 0 {
++			return true, &SetError{Code: CodeInvalidValue, Key: key, Msg: fmt.Sprintf("%s 的程式名稱不正確：%q", key, value)}
++		}
++		if apps == nil {
++			apps = []string{}
++		}
++		return true, s.modSetExtra(modEnglishAppsKey, apps)
++	}
++	return false, nil
++}
++
++// ModAppListed 回報執行檔名稱是否在清單中（不分大小寫）。
++func ModAppListed(apps []string, exe string) bool {
++	return slices.ContainsFunc(apps, func(a string) bool { return strings.EqualFold(a, exe) })
++}
++
++// EnglishAppsJoined 是給外殼的清單（以 | 分隔）。
++func (s Settings) EnglishAppsJoined() string { return strings.Join(s.EnglishApps(), "|") }
+diff --git a/internal/settings/mod_test.go b/internal/settings/mod_test.go
+new file mode 100644
+index 0000000..60cbd8a
+--- /dev/null
++++ b/internal/settings/mod_test.go
+@@ -0,0 +1,50 @@
++package settings
++
++import (
++	"path/filepath"
++	"testing"
++)
++
++func TestModDefaultsAndRoundTrip(t *testing.T) {
++	s := Default()
++	if !s.EndOnToggle() || len(s.EnglishApps()) != 0 {
++		t.Fatalf("預設：切換結束組字開、清單空：%v %v", s.EndOnToggle(), s.EnglishApps())
++	}
++	if err := s.Set(ModEndOnToggleItem, "off"); err != nil {
++		t.Fatal(err)
++	}
++	if err := s.Set(ModEnglishAppsItem, `AfterFX.exe|C:\Program Files\Adobe\Adobe Premiere Pro.exe|afterfx.EXE| `); err != nil {
++		t.Fatal(err)
++	}
++	path := filepath.Join(t.TempDir(), "settings.json")
++	if err := Save(path, s); err != nil {
++		t.Fatal(err)
++	}
++	r, err := Read(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	got := r.Settings
++	if got.EndOnToggle() {
++		t.Fatal("關閉後存檔再讀應為 off")
++	}
++	if apps := got.EnglishApps(); len(apps) != 2 || apps[0] != "AfterFX.exe" || apps[1] != "Adobe Premiere Pro.exe" {
++		t.Fatalf("清單去掉路徑與重複：%q", apps)
++	}
++	if v, _ := got.Value(ModEnglishAppsItem); v != "AfterFX.exe|Adobe Premiere Pro.exe" {
++		t.Fatalf("Value：%q", v)
++	}
++	if !ModAppListed(got.EnglishApps(), "afterfx.exe") || ModAppListed(got.EnglishApps(), "Photoshop.exe") {
++		t.Fatal("比對不分大小寫")
++	}
++	// 其他設定照常改，改裝的兩項不受影響。
++	if err := got.Set("esc-clear", "off"); err != nil || got.EndOnToggle() || len(got.EnglishApps()) != 2 {
++		t.Fatalf("改其他設定後：%v %v %v", err, got.EndOnToggle(), got.EnglishApps())
++	}
++	if err := got.Set(ModEnglishAppsItem, "none"); err != nil || len(got.EnglishApps()) != 0 {
++		t.Fatalf("清空：%v %v", err, got.EnglishApps())
++	}
++	if err := got.Set(ModEndOnToggleItem, "maybe"); err == nil {
++		t.Fatal("不合法的值應回錯誤")
++	}
++}
+diff --git a/internal/settings/settings.go b/internal/settings/settings.go
+index f4e1f1d..150cf70 100644
+--- a/internal/settings/settings.go
++++ b/internal/settings/settings.go
+@@ -785,6 +785,7 @@ func specs() []spec {
+ 		out = append(out, spec{"fuzzy-" + p.ID(), "模糊音 " + p.Symbols(), "把近音的字也列進候選，原音仍排在前面；「自動修正」（實驗）會在上下文明顯支持近音時另外自動改字", DefaultFuzzy, []string{"off", "select", "auto"},
+ 			func(s Settings) string { return s.FuzzyConfig().Mode(p).String() }})
+ 	}
++	out = append(out, modSpecs()...) // 0c-ime-mod
+ 	return out
+ }
+ 
+@@ -925,6 +926,9 @@ func (s Settings) Value(key string) (string, bool) {
+ 
+ // Set 依命令列的鍵與值修改設定；錯誤為 *SetError。明確設定某個欄位會丟掉先前為它保留的原文。
+ func (s *Settings) Set(key, value string) error {
++	if handled, err := s.modSet(key, value); handled { // 0c-ime-mod
++		return err
++	}
+ 	sp, ok := lookup(key)
+ 	if !ok {
+ 		names := make([]string, 0, len(specs()))
+diff --git a/internal/settings/settings_test.go b/internal/settings/settings_test.go
+index adb8b81..f9f742b 100644
+--- a/internal/settings/settings_test.go
++++ b/internal/settings/settings_test.go
+@@ -410,7 +410,7 @@ func TestCorruptFileIsReportedAndCanBeQuarantined(t *testing.T) {
+ func TestItemsListEveryKeyWithCurrentValue(t *testing.T) {
+ 	s := Default()
+ 	items := s.Items()
+-	want := 19 + len(fuzzy.Pairs())
++	want := 19 + len(fuzzy.Pairs()) + len(modSpecs()) // 0c-ime-mod
+ 	if CapsLockEnglishSetting(runtime.GOOS) {
+ 		want++ // caps-lock-english（#173）只有 Windows、Linux
+ 	}
+diff --git a/platforms/settings/build.rs b/platforms/settings/build.rs
+index 64addbf..bfb77c3 100644
+--- a/platforms/settings/build.rs
++++ b/platforms/settings/build.rs
+@@ -1,6 +1,7 @@
+ // 只有下列指令能從前端呼叫；其他（含 shell、檔案系統）一律不存在。
+ const COMMANDS: &[&str] = &["app_info", "get_status", "get_settings", "set_settings", "check_update", "download_update", "install_update", "export_summary",
+-    "vocab_request", "api_command", "vocab_watch", "vocab_unwatch", "models_command", "open_url"];
++    "vocab_request", "api_command", "vocab_watch", "vocab_unwatch", "models_command", "open_url",
++    "list_window_apps" /* 0c-ime-mod */];
+ 
+ fn main() {
+     tauri_build::try_build(
+diff --git a/platforms/settings/capabilities/main.json b/platforms/settings/capabilities/main.json
+index 5965108..c686a7c 100644
+--- a/platforms/settings/capabilities/main.json
++++ b/platforms/settings/capabilities/main.json
+@@ -18,6 +18,7 @@
+     "allow-vocab-unwatch",
+     "allow-models-command",
+     "allow-open-url",
++    "allow-list-window-apps",
+     "core:event:allow-listen",
+     "core:event:allow-unlisten"
+   ]
+diff --git a/platforms/settings/src/main.rs b/platforms/settings/src/main.rs
+index 301213d..79daf08 100644
+--- a/platforms/settings/src/main.rs
++++ b/platforms/settings/src/main.rs
+@@ -3,6 +3,7 @@
+ #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+ 
+ #[cfg(target_os = "macos")]
++mod modapps; // 0c-ime-mod
+ mod navigate_mac;
+ mod updater;
+ mod watch;
+@@ -302,7 +303,8 @@ fn main() {
+         .manage(watch::Watcher::default())
+         .invoke_handler(tauri::generate_handler![
+             app_info, get_status, get_settings, set_settings, check_update, download_update, install_update, export_summary,
+-            vocab_request, api_command, vocab_watch, vocab_unwatch, models_command, open_url
++            vocab_request, api_command, vocab_watch, vocab_unwatch, models_command, open_url,
++            modapps::list_window_apps // 0c-ime-mod
+         ])
+         .setup(move |app| {
+             open_window(app.handle(), page)?;
+diff --git a/platforms/settings/src/modapps.rs b/platforms/settings/src/modapps.rs
+new file mode 100644
+index 0000000..9623d5a
+--- /dev/null
++++ b/platforms/settings/src/modapps.rs
+@@ -0,0 +1,57 @@
++//! 0c-ime-mod：「一律從英文開始的程式」清單的挑選器——列出目前有視窗的程式（執行檔名稱與視窗標題）。
++use serde_json::{json, Value};
++
++/// 目前有主視窗的程式；同一個執行檔只列一次。非 Windows 回空清單。
++#[tauri::command]
++pub async fn list_window_apps() -> Result<Value, String> {
++    tauri::async_runtime::spawn_blocking(scan)
++        .await
++        .map_err(|e| e.to_string())?
++}
++
++#[cfg(windows)]
++fn scan() -> Result<Value, String> {
++    use std::os::windows::process::CommandExt;
++    // 以 PowerShell 列出有主視窗的行程；不加相依套件。CREATE_NO_WINDOW 不閃黑窗。
++    let script = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path } | \
++        ForEach-Object { [IO.Path]::GetFileName($_.Path) + \"`t\" + $_.MainWindowTitle }";
++    let out = std::process::Command::new("powershell.exe")
++        .args(["-NoProfile", "-NonInteractive", "-Command", script])
++        .creation_flags(0x0800_0000)
++        .output()
++        .map_err(|e| format!("無法列出程式：{e}"))?;
++    let text = String::from_utf8_lossy(&out.stdout);
++    Ok(Value::Array(parse(&text)))
++}
++
++#[cfg(not(windows))]
++fn scan() -> Result<Value, String> {
++    Ok(Value::Array(Vec::new()))
++}
++
++/// 每行「執行檔名稱<Tab>視窗標題」；略過空行與重複的執行檔（不分大小寫），依名稱排序。
++fn parse(text: &str) -> Vec<Value> {
++    let mut seen = std::collections::HashSet::new();
++    let mut apps: Vec<(String, String)> = Vec::new();
++    for line in text.lines() {
++        let (exe, title) = line.split_once('\t').unwrap_or((line, ""));
++        let exe = exe.trim();
++        if exe.is_empty() || !seen.insert(exe.to_ascii_lowercase()) {
++            continue;
++        }
++        apps.push((exe.to_string(), title.trim().to_string()));
++    }
++    apps.sort_by_key(|(exe, _)| exe.to_ascii_lowercase());
++    apps.into_iter().map(|(exe, title)| json!({"exe": exe, "title": title})).collect()
++}
++
++#[cfg(test)]
++mod tests {
++    #[test]
++    fn parse_dedupes_and_sorts() {
++        let got = super::parse("notepad.exe\t無標題\nAfterFX.exe\tAdobe After Effects\nafterfx.exe\tx\n\n");
++        assert_eq!(got.len(), 2);
++        assert_eq!(got[0]["exe"], "AfterFX.exe");
++        assert_eq!(got[1]["title"], "無標題");
++    }
++}
+diff --git a/platforms/settings/src/updater.rs b/platforms/settings/src/updater.rs
+index e8924c1..a1c4978 100644
+--- a/platforms/settings/src/updater.rs
++++ b/platforms/settings/src/updater.rs
+@@ -102,6 +102,15 @@ fn valid_value(value: &str) -> bool {
+             && value.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+ }
+ 
++/// 0c-ime-mod：「一律從英文開始的程式」的值是以 | 分隔的執行檔名稱，含大寫、空白與點，另外放行。
++/// 不能以 - 開頭（會被當成旗標），不含控制字元與路徑、萬用字元。
++fn mod_list_value(key: &str, value: &str) -> bool {
++    key == "english-apps"
++        && value.len() <= 4000
++        && !value.starts_with('-')
++        && value.chars().all(|c| !c.is_control() && !"\"<>:*?\\/".contains(c))
++}
++
+ /// 前端送來的設定修改：數量與字元都限制住，不讓任意字串變成 0c-update 的參數。
+ /// 這只是第一道檢查；鍵是否存在、值是否合法由 0c-update 判斷。
+ pub fn validate_pairs(pairs: &[(String, String)]) -> Result<(), String> {
+@@ -109,7 +118,7 @@ pub fn validate_pairs(pairs: &[(String, String)]) -> Result<(), String> {
+         return Err("設定修改的數量不正確".to_string());
+     }
+     for (key, value) in pairs {
+-        if !valid_key(key) || !valid_value(value) {
++        if !valid_key(key) || !(valid_value(value) || mod_list_value(key, value)) {
+             return Err(format!("設定 {key:?} 的格式不正確"));
+         }
+     }
+diff --git a/platforms/settings/ui/app.js b/platforms/settings/ui/app.js
+index 48539aa..e006088 100644
+--- a/platforms/settings/ui/app.js
++++ b/platforms/settings/ui/app.js
+@@ -416,7 +416,8 @@
+     const capsLock = items.find((item) => item.key === 'caps-lock-english'); // #173：鍵盤卡片最後；只有 Windows、Linux 有
+     const selectionKeys = items.find((item) => item.key === 'selection-keys'); // #112：跟鍵盤排列放在同一張卡
+     const rest = items.filter((item) => !item.key.startsWith('fuzzy-') && item.key !== 'keyboard-layout' && item.key !== 'selection-keys' && item.key !== 'ctrl-punctuation' && item.key !== 'caps-lock-english' &&
+-      item.key !== 'output-simplified' && (!emoji || item.key !== 'emoji-equals-first'));
++      item.key !== 'output-simplified' && (!emoji || item.key !== 'emoji-equals-first') &&
++      !(window.ZcMod && window.ZcMod.keys.includes(item.key))); // 0c-ime-mod：改裝的兩項另外畫
+     const rows = rest.map((item) => {
+       const parent = itemRow(item, locked ||
+         (item.key === 'emoji-shortcut' && state.busy.has('emoji-equals-first')));
+@@ -426,6 +427,7 @@
+       return h('div', { class: 'setting-group', role: 'group', 'aria-labelledby': 'label-' + item.key }, parent, child);
+     });
+     root.append(h('h2', {}, '選字與標點'), h('div', { class: 'card' }, ...rows));
++    if (window.ZcMod) window.ZcMod.render(root, { h, row, itemRow, changePairs, invoke, toast, state, locked, rerender: render }); // 0c-ime-mod
+     if (fuzzy.length) {
+       const enabled = fuzzy.some((item) => item.value !== 'off');
+       const name = h('span', {}, '模糊音');
+diff --git a/platforms/settings/ui/index.html b/platforms/settings/ui/index.html
+index 35433a2..3d17dfb 100644
+--- a/platforms/settings/ui/index.html
++++ b/platforms/settings/ui/index.html
+@@ -5,6 +5,7 @@
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>靈犀注音設定</title>
+ <link rel="stylesheet" href="app.css">
++<link rel="stylesheet" href="mod.css">
+ </head>
+ <body>
+ <div class="app">
+@@ -34,6 +35,7 @@
+ <script src="engine-state.js"></script>
+ <script src="vocab.js"></script>
+ <script src="models.js"></script>
++<script src="mod.js"></script>
+ <script src="app.js"></script>
+ </body>
+ </html>
+diff --git a/platforms/settings/ui/mod.css b/platforms/settings/ui/mod.css
+new file mode 100644
+index 0000000..9493ad4
+--- /dev/null
++++ b/platforms/settings/ui/mod.css
+@@ -0,0 +1,15 @@
++/* 0c-ime-mod：「中英切換（改裝）」卡片 */
++.mod-apps .label { font-weight: 600; }
++.mod-apps > div > .desc { color: var(--muted); font-size: 13px; }
++.mod-apps { padding: 13px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
++.mod-app-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; }
++.mod-app-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px 6px 14px; border-bottom: 1px solid var(--line); }
++.mod-app-list li:last-child { border-bottom: 0; }
++.mod-app-list .mod-empty { color: var(--muted); font-size: 13px; padding: 10px 14px; }
++.mod-exe { font-family: Consolas, ui-monospace, monospace; overflow-wrap: anywhere; }
++.mod-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
++.mod-input { flex: 1 1 220px; min-width: 0; font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
++.mod-picker { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); max-height: 280px; overflow-y: auto; }
++.mod-pick { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 0; border: 0; border-radius: 6px; padding: 6px 10px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
++.mod-pick:hover { background: var(--accent-soft); }
++.mod-pick .desc { color: var(--muted); font-size: 12px; }
+diff --git a/platforms/settings/ui/mod.js b/platforms/settings/ui/mod.js
+new file mode 100644
+index 0000000..be45385
+--- /dev/null
++++ b/platforms/settings/ui/mod.js
+@@ -0,0 +1,83 @@
++// 0c-ime-mod：輸入設定頁的「中英切換（改裝）」卡片——切換時結束組字、一律從英文開始的程式。
++// app.js 只呼叫 ZcMod.keys 與 ZcMod.render；其他都在這裡，官方更新時比較不會衝突。
++(function () {
++  'use strict';
++  const KEYS = ['end-composition-on-toggle', 'english-apps'];
++  let picker = null; // { loading, apps: [{exe,title}], error }
++
++  function splitApps(value) {
++    return (value || '').split('|').map((s) => s.trim()).filter(Boolean);
++  }
++
++  function render(root, ctx) {
++    const { h, row, itemRow, changePairs, invoke, toast, state, locked, rerender } = ctx;
++    const items = (state.settings && state.settings.items) || [];
++    const endItem = items.find((item) => item.key === KEYS[0]);
++    const appsItem = items.find((item) => item.key === KEYS[1]);
++    if (!endItem && !appsItem) return;
++    const card = h('div', { class: 'card' });
++    if (endItem) card.append(itemRow(endItem, locked));
++    if (appsItem) card.append(appsBlock(appsItem));
++    root.append(h('h2', {}, '中英切換（改裝）'), card);
++
++    function save(list) {
++      return changePairs([[KEYS[1], list.length ? list.join('|') : 'none']]);
++    }
++
++    function appsBlock(item) {
++      const apps = splitApps(item.value);
++      const busy = locked || state.busy.has(item.key);
++      const listed = new Set(apps.map((a) => a.toLowerCase()));
++      const block = h('div', { class: 'mod-apps' },
++        h('div', {}, h('div', { class: 'label', id: 'label-' + item.key }, item.label),
++          h('div', { class: 'desc' }, item.description)),
++        h('ul', { class: 'mod-app-list', 'aria-labelledby': 'label-' + item.key },
++          apps.length
++            ? apps.map((exe) => h('li', {},
++              h('span', { class: 'mod-exe' }, exe),
++              h('button', {
++                type: 'button', class: 'secondary small', disabled: busy, 'aria-label': '從清單移除 ' + exe,
++                onclick: () => save(apps.filter((a) => a !== exe)),
++              }, '移除')))
++            : h('li', { class: 'mod-empty' }, '清單是空的')));
++      const field = h('input', {
++        type: 'text', class: 'mod-input', placeholder: '輸入執行檔名稱，例如 AfterFX.exe', 'aria-label': '新增程式', disabled: busy,
++        onkeydown: (event) => { if (event.key === 'Enter') add(); },
++      });
++      function add() {
++        let exe = field.value.trim().split(/[\\/]/).pop();
++        if (!exe) return;
++        if (!/\.exe$/i.test(exe)) exe += '.exe';
++        if (listed.has(exe.toLowerCase())) { toast('清單裡已經有 ' + exe, 'warn'); return; }
++        save(apps.concat([exe]));
++      }
++      block.append(h('div', { class: 'mod-add' }, field,
++        h('button', { type: 'button', class: 'secondary', disabled: busy, onclick: add }, '加入'),
++        h('button', {
++          type: 'button', class: 'primary', disabled: busy || (picker && picker.loading), onclick: async () => {
++            picker = { loading: true, apps: [] };
++            rerender();
++            try {
++              picker = { loading: false, apps: await invoke('list_window_apps') };
++            } catch (error) {
++              picker = { loading: false, apps: [], error: String(error) };
++            }
++            rerender();
++          },
++        }, picker && picker.loading ? '讀取中…' : '從開著的程式挑選…')));
++      if (picker && !picker.loading) {
++        const choices = picker.apps.filter((app) => !listed.has(String(app.exe).toLowerCase()));
++        block.append(h('div', { class: 'mod-picker', role: 'group', 'aria-label': '開著的程式' },
++          picker.error ? h('p', { class: 'desc' }, picker.error) : null,
++          !picker.error && !choices.length ? h('p', { class: 'desc' }, '沒有其他開著的程式') : null,
++          choices.map((app) => h('button', {
++            type: 'button', class: 'mod-pick', disabled: busy, onclick: () => { picker = null; save(apps.concat([app.exe])); },
++          }, h('span', { class: 'mod-exe' }, app.exe), app.title ? h('span', { class: 'desc' }, app.title) : null)),
++          h('button', { type: 'button', class: 'link', onclick: () => { picker = null; rerender(); } }, '關閉')));
++      }
++      return block;
++    }
++  }
++
++  window.ZcMod = { keys: KEYS, render };
++})();
+diff --git a/platforms/windows/tsf/src/lib.rs b/platforms/windows/tsf/src/lib.rs
+index 77b352f..b819fb3 100644
+--- a/platforms/windows/tsf/src/lib.rs
++++ b/platforms/windows/tsf/src/lib.rs
+@@ -30,6 +30,7 @@ mod msctf;
+ mod privacy;
+ mod register;
+ mod service;
++mod modapps; // 0c-ime-mod
+ mod session;
+ mod ui;
+ mod uielement;
+diff --git a/platforms/windows/tsf/src/modapps.rs b/platforms/windows/tsf/src/modapps.rs
+new file mode 100644
+index 0000000..eee7b8d
+--- /dev/null
++++ b/platforms/windows/tsf/src/modapps.rs
+@@ -0,0 +1,31 @@
++//! 0c-ime-mod：「一律從英文開始的程式」。引擎在 health／open 的 info 回報 english_apps（執行檔名稱以 | 分隔），
++//! 這個程式在清單裡時：還不知道中英模式（剛開的程式）就從英文開始，英文模式也不做自動補字（字母直接交給程式）。
++use serde_json::Value;
++
++/// `exe` 是否在 info 的 english_apps 清單裡（不分大小寫）。
++pub fn listed_in(info: &Value, exe: &str) -> bool {
++    info["english_apps"]
++        .as_str()
++        .is_some_and(|list| list.split('|').any(|app| !app.is_empty() && app.eq_ignore_ascii_case(exe)))
++}
++
++/// 目前的程式是否在清單裡。
++pub fn listed(info: &Value) -> bool {
++    listed_in(info, crate::log::exe_name())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++
++    #[test]
++    fn matches_exe_case_insensitively() {
++        let info = json!({"english_apps": "AfterFX.exe|Adobe Premiere Pro.exe"});
++        assert!(listed_in(&info, "afterfx.EXE"));
++        assert!(listed_in(&info, "Adobe Premiere Pro.exe"));
++        assert!(!listed_in(&info, "Photoshop.exe"));
++        assert!(!listed_in(&json!({"english_apps": ""}), ""));
++        assert!(!listed_in(&json!({}), "AfterFX.exe"));
++    }
++}
+diff --git a/platforms/windows/tsf/src/service.rs b/platforms/windows/tsf/src/service.rs
+index d78de06..7e3b321 100644
+--- a/platforms/windows/tsf/src/service.rs
++++ b/platforms/windows/tsf/src/service.rs
+@@ -823,8 +823,8 @@ impl TextService_Impl {
+         }
+         let snap = {
+             let mut st = self.state.borrow_mut();
+-            if !st.session.english() || !st.session.available() {
+-                return None;
++            if !st.session.english() || !st.session.available() || st.session.english_app() {
++                return None; // 0c-ime-mod：清單裡的程式不做英文自動補字
+             }
+             if !st.composing {
+                 st.session.handle(json!({"type": "display", "columns": 0}))
+diff --git a/platforms/windows/tsf/src/session.rs b/platforms/windows/tsf/src/session.rs
+index e901a21..ef62feb 100644
+--- a/platforms/windows/tsf/src/session.rs
++++ b/platforms/windows/tsf/src/session.rs
+@@ -129,6 +129,8 @@ pub struct Session {
+     simplified: bool,
+     // 上一次從引擎得知「輸出簡體字」的時間（health／open／快照）；換欄位時剛問過就不再問（refresh_simplified_after）。
+     simplified_at: Option<Instant>,
++    /// 0c-ime-mod：這個程式在「一律從英文開始的程式」清單裡（modapps.rs）。
++    english_app: bool,
+ }
+ 
+ /// 重開 session（引擎重啟、斷線）時要不要送「設定模式」還原外殼記得的模式（#160）。新 session 從開始時的模式起：
+@@ -193,6 +195,7 @@ impl Session {
+             simplified_live: false,
+             simplified: false,
+             simplified_at: None,
++            english_app: false,
+         }
+     }
+ 
+@@ -275,9 +278,20 @@ impl Session {
+             self.english = english;
+             self.caps_english = false; // 模式照引擎的（共用模式或開始時的）；Caps Lock 由下一個按鍵重新同步（#173）
+         }
++        // 0c-ime-mod：清單裡的程式從英文開始（全部共用時照共用的模式）。
++        self.english_app = crate::modapps::listed(&reply["info"]);
++        if self.english_app && !self.shared {
++            self.english = true;
++            self.caps_english = false;
++        }
+         before != self.english || simplified
+     }
+ 
++    /// 0c-ime-mod：這個程式在「一律從英文開始的程式」清單裡。
++    pub fn english_app(&self) -> bool {
++        self.english_app
++    }
++
+     /// 目前的 session 是否可以送 #123 的新鍵名（Shift＋←／→、Shift＋Delete／Backspace）。
+     /// 還沒開 session 或引擎不支援時為 false；沒在組字時這些鍵本來就交還應用程式，不需要查。
+     pub fn vocab_keys(&self) -> bool {
+@@ -423,6 +437,13 @@ impl Session {
+         self.caps_lock_english = reply["info"]["caps_lock_english"] == "true";
+         self.caps_generation = self.generation;
+         self.learn_simplified(&reply["info"]);
++        // 0c-ime-mod：清單裡的程式從英文開始。還不知道這個程式的模式時當成已知的英文，
++        // 下面的 restore_requests 就會請引擎把新 session 切到英文。
++        self.english_app = crate::modapps::listed(&reply["info"]);
++        if self.english_app && !self.shared && !self.mode_known {
++            self.english = true;
++            self.mode_known = true;
++        }
+         let start_english = reply["info"]["start_mode"] == "english";
+         self.pending_context = None; // 新 session 不認得舊代號
+         if self.context_enabled {
+-- 
+2.43.0
+
