@@ -1,4 +1,4 @@
-﻿# 下載並安裝最新的靈犀注音改裝版，並設定每天自動更新。需要系統管理員權限（更新輸入法 DLL）。
+# 下載並安裝最新的靈犀注音改裝版，並設定每天自動更新。需要系統管理員權限（更新輸入法 DLL）。
 #
 #   手動安裝／更新：irm https://raw.githubusercontent.com/IvesNash/0c-ime-mod/main/install-mod.ps1 | iex
 #   自動更新（排程呼叫）：install-mod.ps1 -Auto
