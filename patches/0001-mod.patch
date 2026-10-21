@@ -1,15 +1,17 @@
-From ee4b8bd1360871f2f1fcccbd3434aa6025b8a320 Mon Sep 17 00:00:00 2001
+From bfad0487d77f8d5b0b5925315fe60105d68c1438 Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
 Date: Wed, 21 Oct 2026 14:43:56 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
  =?UTF-8?q?=E4=B8=AD=E8=8B=B1=E6=99=82=E7=B5=90=E6=9D=9F=E7=B5=84=E5=AD=97?=
  =?UTF-8?q?=E3=80=81=E4=B8=80=E5=BE=8B=E5=BE=9E=E8=8B=B1=E6=96=87=E9=96=8B?=
- =?UTF-8?q?=E5=A7=8B=E7=9A=84=E7=A8=8B=E5=BC=8F?=
+ =?UTF-8?q?=E5=A7=8B=E7=9A=84=E7=A8=8B=E5=BC=8F=E3=80=81=E5=A4=A7=E5=AF=AB?=
+ =?UTF-8?q?=E5=AD=97=E6=AF=8D=E5=BE=8C=E6=8E=A5=E6=B3=A8=E9=9F=B3?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 - 引擎：EndOnToggle（預設開）單按 Shift 切換時送出已組好的字、清掉沒打完的注音，組字區關閉
+- 引擎：中英混打時單一個大寫字母後面接注音會切開（輸入P的話：P2k7cj84 → P的話）
 - 外殼：english_apps 清單裡的程式從英文開始，英文模式不做自動補字
 - 設定：兩項存在 settings.json 的保留欄位，官方版會原樣保留
 - 設定程式：「中英切換（改裝）」卡片與「從開著的程式挑選」
@@ -17,6 +19,9 @@ Content-Transfer-Encoding: 8bit
  cmd/0c-server/main.go                     |   4 +
  cmd/0c-update/main.go                     |   3 +
  core/engine/engine.go                     |   2 +
+ core/session/mixed.go                     |   5 +
+ core/session/mod_mixed.go                 |  40 +++++++
+ core/session/mod_mixed_test.go            |  39 ++++++
  core/session/mod_toggle.go                |  19 +++
  core/session/mod_toggle_test.go           |  84 +++++++++++++
  core/session/session.go                   |   6 +
@@ -37,7 +42,9 @@ Content-Transfer-Encoding: 8bit
  platforms/windows/tsf/src/modapps.rs      |  31 +++++
  platforms/windows/tsf/src/service.rs      |   4 +-
  platforms/windows/tsf/src/session.rs      |  21 ++++
- 23 files changed, 541 insertions(+), 7 deletions(-)
+ 26 files changed, 625 insertions(+), 7 deletions(-)
+ create mode 100644 core/session/mod_mixed.go
+ create mode 100644 core/session/mod_mixed_test.go
  create mode 100644 core/session/mod_toggle.go
  create mode 100644 core/session/mod_toggle_test.go
  create mode 100644 internal/settings/mod.go
@@ -103,6 +110,113 @@ index 43aff24..c82f4f6 100644
  	e.sessions[e.next].MixedInput = e.MixedInput
  	e.sessions[e.next].EmojiShortcut = e.EmojiShortcut
  	e.sessions[e.next].EmojiEqualsFirst = e.EmojiEqualsFirst
+diff --git a/core/session/mixed.go b/core/session/mixed.go
+index 0d321eb..50d8abe 100644
+--- a/core/session/mixed.go
++++ b/core/session/mixed.go
+@@ -473,6 +473,11 @@ func (s *Session) mixedBoundary(raw, key string, tone rune) (int, zhuyin.Syllabl
+ 			best, bestScore, bestSyl = at, score, done
+ 		}
+ 	}
++	if best == 0 { // 0c-ime-mod：單一個大寫字母後面接注音（mod_mixed.go）
++		if done, ok := s.modUpperSplit(raw, key, tone); ok {
++			return 1, done, true
++		}
++	}
+ 	// 字典不認得的前段：聲調前一鍵是數字（lisa03、nina87）像帳號或編號，不切。
+ 	if best > 0 || key == " " || unicode.IsDigit(rune(raw[len(raw)-1])) {
+ 		return best, bestSyl, best > 0
+diff --git a/core/session/mod_mixed.go b/core/session/mod_mixed.go
+new file mode 100644
+index 0000000..6190016
+--- /dev/null
++++ b/core/session/mod_mixed.go
+@@ -0,0 +1,40 @@
++package session
++
++// 0c-ime-mod：中英混打時，單一個大寫字母後面接注音。
++//
++// 原本的英→中切點（mixedBoundary，#119）要求英文前段是字典認得的字、數字或標點，或至少兩個字母，
++// 所以「輸入P的話」打成 P2k7cj84 會整串留成英文。大寫字母只能按著 Shift 打出來，不會是注音鍵，
++// 後面的按鍵照注音順序（聲母、介音、韻母）組成常用字時，就在大寫字母後面切開：P2k7 → P的、Psu3 → P你。
++// 接空白的一聲（P5␣ → P之）也切，但整串是英文字（Pig、Ted）時照字面。
++
++import (
++	"strings"
++
++	"github.com/0c-biggo/0c-ime/core/zhuyin"
++)
++
++// modUpperSplit 回傳大寫字母之後（切點 1）的音節；不符合時 ok=false。
++func (s *Session) modUpperSplit(raw, key string, tone rune) (zhuyin.Syllable, bool) {
++	// 後段至少兩鍵：一鍵的音節（Ok3、Go␣）跟英文分不開。
++	if len(raw) < 3 || raw[0] < 'A' || raw[0] > 'Z' {
++		return "", false
++	}
++	rest := raw[1:]
++	if strings.ContainsFunc(rest, func(r rune) bool { return r >= 'A' && r <= 'Z' || r > 0x7f }) {
++		return "", false
++	}
++	if !s.keysInSyllableOrder(rest) {
++		return "", false
++	}
++	if key == " " && s.mixedEnglishWord(raw) {
++		return "", false // Pig␣、Ted␣ 是英文字
++	}
++	done, ok := s.mixedReading(rest, tone)
++	if !ok || tone == '˙' && done.ToneOf() != 5 {
++		return "", false
++	}
++	if s.mixedSyllableScore(done) < mixedUnknownWordFloor {
++		return "", false
++	}
++	return done, true
++}
+diff --git a/core/session/mod_mixed_test.go b/core/session/mod_mixed_test.go
+new file mode 100644
+index 0000000..c264424
+--- /dev/null
++++ b/core/session/mod_mixed_test.go
+@@ -0,0 +1,39 @@
++package session
++
++import "testing"
++
++// 0c-ime-mod：單一個大寫字母後面接注音。
++func TestModUpperLetterThenZhuyin(t *testing.T) {
++	cases := []struct {
++		keys []string
++		want string
++	}{
++		{[]string{"P", "v", "u", ";", "3"}, "我P想"},             // 實際字典：P2k7 → P的
++		{[]string{"P", "z", "/", " "}, "我P風"},                  // 一聲接空白
++		{[]string{"P", "i", "g", "v", "u", ";", "3"}, "我Pig想"}, // Pig 是英文字，原本就切得開
++	}
++	for _, c := range cases {
++		s := mixedSession()
++		typeSyl(s, "ㄨㄛˇ")
++		var got string
++		for _, k := range c.keys {
++			got = key(s, k).Text()
++		}
++		if got != c.want {
++			t.Errorf("%v：%q，想要 %q", c.keys, got, c.want)
++		}
++	}
++}
++
++func TestModUpperLetterKeepsEnglish(t *testing.T) {
++	for _, word := range []string{"Pig", "Go", "Hi", "Ted", "Yes", "Ok"} {
++		s := mixedSession()
++		typeSyl(s, "ㄨㄛˇ")
++		for _, r := range word {
++			key(s, string(r))
++		}
++		if got := key(s, " ").Text(); got != "我"+word+" " && got != "我"+word {
++			t.Errorf("%s␣ 應照字面：%q", word, got)
++		}
++	}
++}
 diff --git a/core/session/mod_toggle.go b/core/session/mod_toggle.go
 new file mode 100644
 index 0000000..229893c
