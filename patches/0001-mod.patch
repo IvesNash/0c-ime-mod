@@ -1,4 +1,4 @@
-From 5a22c3f1dbb99a9efce30ed764cf7958fe338912 Mon Sep 17 00:00:00 2001
+From ee4b8bd1360871f2f1fcccbd3434aa6025b8a320 Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
 Date: Wed, 21 Oct 2026 14:43:56 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
@@ -502,17 +502,17 @@ index 5965108..c686a7c 100644
      "core:event:allow-unlisten"
    ]
 diff --git a/platforms/settings/src/main.rs b/platforms/settings/src/main.rs
-index 301213d..79daf08 100644
+index 301213d..2155143 100644
 --- a/platforms/settings/src/main.rs
 +++ b/platforms/settings/src/main.rs
-@@ -3,6 +3,7 @@
- #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+@@ -4,6 +4,7 @@
  
  #[cfg(target_os = "macos")]
-+mod modapps; // 0c-ime-mod
  mod navigate_mac;
++mod modapps; // 0c-ime-mod
  mod updater;
  mod watch;
+ 
 @@ -302,7 +303,8 @@ fn main() {
          .manage(watch::Watcher::default())
          .invoke_handler(tauri::generate_handler![
