@@ -9,13 +9,18 @@
 
 兩項都在「靈犀注音設定 → 輸入設定 → 中英切換（改裝）」。
 
-## 安裝／更新
+## 安裝
 
-在 PowerShell 執行（會跳出系統管理員確認）：
+在 PowerShell 執行一次（會跳出系統管理員確認）：
 
 ```powershell
 irm https://raw.githubusercontent.com/IvesNash/0c-ime-mod/main/install-mod.ps1 | iex
 ```
+
+安裝後會建立 Windows 排程「0c-ime-mod 自動更新」：每天 12:30 與登入時檢查，有新的改裝版就自動安裝（紀錄在 `%LOCALAPPDATA%\0c-ime-mod\update.log`）。0c 內建的官方自動更新會改成手動，免得官方版蓋掉改裝版。
+
+- 取消自動更新：`powershell -File $env:LOCALAPPDATA\0c-ime-mod\install-mod.ps1 -RemoveSchedule`
+- 回到官方版：從官網重新安裝；排程看到不是改裝版就不會再更新。
 
 ## 運作方式
 
