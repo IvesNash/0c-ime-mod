@@ -152,14 +152,29 @@ jobs:
           cargo --version
       - name: 編譯設定程式
         working-directory: src
-        run: python scripts/build_settings_windows.py --version "$VERSION" --out build/settings
+        run: |
+          mkdir -p ../logs
+          python scripts/build_settings_windows.py --version "$VERSION" --out build/settings 2>&1 | tee ../logs/settings.log
+          exit ${PIPESTATUS[0]}
       - name: 編譯並打包
         working-directory: src
         run: |
+          mkdir -p ../logs
           python scripts/package_windows.py --preview --version "$VERSION" \
             --data assets/data --neural ../neural --settings build/settings/windows-amd64 \
-            --release-docs ../mod/docs --out ../out
-          ls -la ../out
+            --release-docs ../mod/docs --out ../out 2>&1 | tee ../logs/package.log
+          status=${PIPESTATUS[0]}
+          ls -la ../out || true
+          exit $status
+      # 失敗時把錯誤附近的輸出寫成一則錯誤摘要（不必下載完整紀錄就能看到原因）。
+      - name: 整理錯誤訊息
+        if: failure()
+        run: |
+          for f in logs/*.log; do
+            [ -f "$f" ] || continue
+            body=$( (grep -n -E -A12 '^error(\[E[0-9]+\])?:|打包失敗|Traceback|Error:' "$f" | head -150; echo '---- 最後 40 行 ----'; tail -n 40 "$f") | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
+            echo "::error title=$f::$body"
+          done
       - name: 發布
         env:
           GH_TOKEN: ${{ github.token }}
