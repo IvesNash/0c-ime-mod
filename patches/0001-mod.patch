@@ -1,4 +1,4 @@
-From bfad0487d77f8d5b0b5925315fe60105d68c1438 Mon Sep 17 00:00:00 2001
+From 2b55470b24f347b9c5d9b11495b0320b983eee7a Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
 Date: Wed, 21 Oct 2026 14:43:56 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
@@ -19,7 +19,7 @@ Content-Transfer-Encoding: 8bit
  cmd/0c-server/main.go                     |   4 +
  cmd/0c-update/main.go                     |   3 +
  core/engine/engine.go                     |   2 +
- core/session/mixed.go                     |   5 +
+ core/session/mixed.go                     |   4 +
  core/session/mod_mixed.go                 |  40 +++++++
  core/session/mod_mixed_test.go            |  39 ++++++
  core/session/mod_toggle.go                |  19 +++
@@ -41,8 +41,8 @@ Content-Transfer-Encoding: 8bit
  platforms/windows/tsf/src/lib.rs          |   1 +
  platforms/windows/tsf/src/modapps.rs      |  31 +++++
  platforms/windows/tsf/src/service.rs      |   4 +-
- platforms/windows/tsf/src/session.rs      |  21 ++++
- 26 files changed, 625 insertions(+), 7 deletions(-)
+ platforms/windows/tsf/src/session.rs      |  27 +++++
+ 26 files changed, 630 insertions(+), 7 deletions(-)
  create mode 100644 core/session/mod_mixed.go
  create mode 100644 core/session/mod_mixed_test.go
  create mode 100644 core/session/mod_toggle.go
@@ -55,18 +55,18 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 platforms/windows/tsf/src/modapps.rs
 
 diff --git a/cmd/0c-server/main.go b/cmd/0c-server/main.go
-index b2a3c83..781700b 100644
+index bcf47d7..e69486e 100644
 --- a/cmd/0c-server/main.go
 +++ b/cmd/0c-server/main.go
-@@ -140,6 +140,7 @@ func serve() string {
- 	eng.Fuzzy = config.FuzzyConfig()
+@@ -151,6 +151,7 @@ func serve() string {
  	eng.MixedInput = config.MixedInput
+ 	eng.Toneless = config.Toneless // #150：開啟時 session 停用混打的自動判斷；health 的 mixed_input 照設定檔回報
  	eng.EnglishAutocomplete = config.EnglishAutocomplete
 +	eng.EndOnToggle = config.EndOnToggle() // 0c-ime-mod
  	eng.CandidateBeforeCursor = config.CandidateCursor == "before"
  	eng.EmojiShortcut = config.EmojiShortcut
  	eng.EmojiEqualsFirst = config.EmojiEqualsFirst
-@@ -426,6 +427,9 @@ func serve() string {
+@@ -468,6 +469,9 @@ func serve() string {
  	if punctuationSource != "" {
  		srv.Info["punctuation_source"] = punctuationSource
  	}
@@ -77,10 +77,10 @@ index b2a3c83..781700b 100644
  	srv.Info["english_pack"] = eng.EnglishPack
  	if eng.EnglishPack == "" {
 diff --git a/cmd/0c-update/main.go b/cmd/0c-update/main.go
-index 1538e24..14581d1 100644
+index 4d38754..1bf3c4b 100644
 --- a/cmd/0c-update/main.go
 +++ b/cmd/0c-update/main.go
-@@ -95,6 +95,9 @@ func listSettings(w io.Writer, r settings.Report, path string) {
+@@ -103,6 +103,9 @@ func listSettings(w io.Writer, r settings.Report, path string) {
  	for _, p := range fuzzy.Pairs() {
  		fmt.Fprintf(w, "fuzzy-%s=%s（%s 模糊音：off 關閉；select 開候選時合併近音；auto 另在語境明顯支持近音時自動改字，實驗）\n", p.ID(), fuzzyConfig.Mode(p), p.Symbols())
  	}
@@ -91,41 +91,40 @@ index 1538e24..14581d1 100644
  
  func isJSONFlag(arg string) bool { return arg == "-json" || arg == "--json" }
 diff --git a/core/engine/engine.go b/core/engine/engine.go
-index 43aff24..c82f4f6 100644
+index eccbe30..4783d5b 100644
 --- a/core/engine/engine.go
 +++ b/core/engine/engine.go
-@@ -39,6 +39,7 @@ type Engine struct {
- 	CapsLockEnglish       bool              // 「Caps Lock 開著時直接打英文」開著時由宿主設定（#173）；零值時 caps_lock 請求不起作用。
+@@ -43,6 +43,7 @@ type Engine struct {
  	Fuzzy                 fuzzy.Config      // 使用者逐對啟用的模糊音；零值全部關閉。
+ 	Toneless              bool              // 「不打聲調也能選字」開著時由宿主設定（#150）；開啟時停用中英混打的自動判斷。
  	EnglishAutocomplete   bool
 +	EndOnToggle           bool                // 0c-ime-mod：切換中英時結束組字
  	MixedInput            bool                // opt-in bilingual keys; disabled preserves legacy behavior.
  	English               *english.Dictionary // nil uses the authored prototype vocabulary.
  	EnglishPack           string              // host-supplied pack version for diagnostics; empty means prototype.
-@@ -98,6 +99,7 @@ func (e *Engine) OpenSession() uint64 {
- 	e.sessions[e.next].CapsLockEnglish = e.CapsLockEnglish
+@@ -125,6 +126,7 @@ func (e *Engine) OpenSession() uint64 {
  	e.sessions[e.next].Fuzzy = e.Fuzzy
+ 	e.sessions[e.next].Toneless = e.Toneless
  	e.sessions[e.next].EnglishAutocomplete = e.EnglishAutocomplete
 +	e.sessions[e.next].EndOnToggle = e.EndOnToggle // 0c-ime-mod
  	e.sessions[e.next].MixedInput = e.MixedInput
  	e.sessions[e.next].EmojiShortcut = e.EmojiShortcut
  	e.sessions[e.next].EmojiEqualsFirst = e.EmojiEqualsFirst
 diff --git a/core/session/mixed.go b/core/session/mixed.go
-index 0d321eb..50d8abe 100644
+index 22ba6f9..8c9ac6e 100644
 --- a/core/session/mixed.go
 +++ b/core/session/mixed.go
-@@ -473,6 +473,11 @@ func (s *Session) mixedBoundary(raw, key string, tone rune) (int, zhuyin.Syllabl
- 			best, bestScore, bestSyl = at, score, done
- 		}
+@@ -525,6 +525,10 @@ func (s *Session) mixedBoundary(raw, key string, tone rune) (int, zhuyin.Syllabl
+ 	if best > 0 {
+ 		return best, bestSyl, true
  	}
-+	if best == 0 { // 0c-ime-mod：單一個大寫字母後面接注音（mod_mixed.go）
-+		if done, ok := s.modUpperSplit(raw, key, tone); ok {
-+			return 1, done, true
-+		}
++	// 0c-ime-mod：單一個大寫字母後面接注音（mod_mixed.go）
++	if done, ok := s.modUpperSplit(raw, key, tone); ok {
++		return 1, done, true
 +	}
- 	// 字典不認得的前段：聲調前一鍵是數字（lisa03、nina87）像帳號或編號，不切。
- 	if best > 0 || key == " " || unicode.IsDigit(rune(raw[len(raw)-1])) {
- 		return best, bestSyl, best > 0
+ 	// 打錯一鍵的注音（#203）：後段以數字鍵結尾（qji3wu0 的 ㄉㄧㄢ 天）也要切開，但切出來的後段要有字母，
+ 	// 只用數字鍵的後段照舊交給下面「帳號、編號」的判斷。接空白的單一鍵只認聲母（ㄗ 資、ㄙ 思）：型號、版本後面的
+ 	// 單一字母（gpt4o、ps4u、win7u）不是 ㄟ、ㄧ 一聲。
 diff --git a/core/session/mod_mixed.go b/core/session/mod_mixed.go
 new file mode 100644
 index 0000000..6190016
@@ -333,18 +332,18 @@ index 0000000..49d42f0
 +	}
 +}
 diff --git a/core/session/session.go b/core/session/session.go
-index 0e8dcf7..07b57a0 100644
+index b75666a..cf70c2e 100644
 --- a/core/session/session.go
 +++ b/core/session/session.go
-@@ -100,6 +100,7 @@ type Session struct {
- 	Simplified *zhconv.Converter
+@@ -109,6 +109,7 @@ type Session struct {
+ 	Toneless bool
  	// MixedInput is opt-in; English is a shared, immutable vocabulary.
  	EnglishAutocomplete   bool
 +	EndOnToggle           bool // 0c-ime-mod：切換中英時結束組字（mod_toggle.go）
  	MixedInput            bool
  	English               *english.Dictionary
  	EmojiShortcut         string
-@@ -348,6 +349,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
+@@ -365,6 +366,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
  		}
  		// 使用者自己切換或外殼設定模式之後，關掉 Caps Lock 不再改變模式（#173）。
  		s.capsEnglish = false
@@ -358,7 +357,7 @@ index 0e8dcf7..07b57a0 100644
  		handled, commit = s.capsLockChanged(r.On)
 diff --git a/internal/settings/mod.go b/internal/settings/mod.go
 new file mode 100644
-index 0000000..7a85edc
+index 0000000..aa8d054
 --- /dev/null
 +++ b/internal/settings/mod.go
 @@ -0,0 +1,137 @@
@@ -462,7 +461,7 @@ index 0000000..7a85edc
 +		{ModEndOnToggleItem, "切換中英時結束組字", "切換時關掉懸浮視窗，之後按鍵直接給程式", "on", []string{"on", "off"},
 +			func(s Settings) string { return onOff(s.EndOnToggle()) }},
 +		// 值是以 | 分隔的執行檔名稱；設定程式另外畫成清單。
-+		{ModEnglishAppsItem, "一律從英文開始的程式", "這些程式一開就是英文，打中文再按右 Shift", "", []string{""},
++		{ModEnglishAppsItem, "一律從英文開始的程式", "這些程式一開就是英文，打中文再按 Shift", "", []string{""},
 +			func(s Settings) string { return strings.Join(s.EnglishApps(), "|") }},
 +	}
 +}
@@ -556,21 +555,21 @@ index 0000000..60cbd8a
 +	}
 +}
 diff --git a/internal/settings/settings.go b/internal/settings/settings.go
-index f4e1f1d..150cf70 100644
+index e200a30..9ad43d1 100644
 --- a/internal/settings/settings.go
 +++ b/internal/settings/settings.go
-@@ -785,6 +785,7 @@ func specs() []spec {
- 		out = append(out, spec{"fuzzy-" + p.ID(), "模糊音 " + p.Symbols(), "把近音的字也列進候選，原音仍排在前面；「自動修正」（實驗）會在上下文明顯支持近音時另外自動改字", DefaultFuzzy, []string{"off", "select", "auto"},
- 			func(s Settings) string { return s.FuzzyConfig().Mode(p).String() }})
+@@ -852,6 +852,7 @@ func specs() []spec {
+ 		r := r
+ 		out = append(out, spec{r.key, r.label, r.description, r.get(inputstyleDefaultRules()), r.values, func(s Settings) string { return r.get(s.ProfileRules()) }})
  	}
 +	out = append(out, modSpecs()...) // 0c-ime-mod
  	return out
  }
  
-@@ -925,6 +926,9 @@ func (s Settings) Value(key string) (string, bool) {
- 
- // Set 依命令列的鍵與值修改設定；錯誤為 *SetError。明確設定某個欄位會丟掉先前為它保留的原文。
- func (s *Settings) Set(key, value string) error {
+@@ -1051,6 +1052,9 @@ func (s *Settings) set(key, value string) error {
+ 	if s.profileLocked(key) {
+ 		return &SetError{Code: "locked_by_profile", Key: key, Msg: "此項由選用的輸入習慣固定；請先複製成自訂"}
+ 	}
 +	if handled, err := s.modSet(key, value); handled { // 0c-ime-mod
 +		return err
 +	}
@@ -578,36 +577,36 @@ index f4e1f1d..150cf70 100644
  	if !ok {
  		names := make([]string, 0, len(specs()))
 diff --git a/internal/settings/settings_test.go b/internal/settings/settings_test.go
-index adb8b81..f9f742b 100644
+index a613b5c..1167ac9 100644
 --- a/internal/settings/settings_test.go
 +++ b/internal/settings/settings_test.go
 @@ -410,7 +410,7 @@ func TestCorruptFileIsReportedAndCanBeQuarantined(t *testing.T) {
  func TestItemsListEveryKeyWithCurrentValue(t *testing.T) {
  	s := Default()
  	items := s.Items()
--	want := 19 + len(fuzzy.Pairs())
-+	want := 19 + len(fuzzy.Pairs()) + len(modSpecs()) // 0c-ime-mod
+-	want := 21 + len(fuzzy.Pairs()) + len(ruleSpecs()) // 含 simplified-hotkey（#192）、toneless（#150）
++	want := 21 + len(fuzzy.Pairs()) + len(ruleSpecs()) + len(modSpecs()) // 含 simplified-hotkey（#192）、toneless（#150）；0c-ime-mod
  	if CapsLockEnglishSetting(runtime.GOOS) {
  		want++ // caps-lock-english（#173）只有 Windows、Linux
  	}
 diff --git a/platforms/settings/build.rs b/platforms/settings/build.rs
-index 64addbf..bfb77c3 100644
+index 56e686e..a4c677c 100644
 --- a/platforms/settings/build.rs
 +++ b/platforms/settings/build.rs
 @@ -1,6 +1,7 @@
  // 只有下列指令能從前端呼叫；其他（含 shell、檔案系統）一律不存在。
  const COMMANDS: &[&str] = &["app_info", "get_status", "get_settings", "set_settings", "check_update", "download_update", "install_update", "export_summary",
--    "vocab_request", "api_command", "vocab_watch", "vocab_unwatch", "models_command", "open_url"];
-+    "vocab_request", "api_command", "vocab_watch", "vocab_unwatch", "models_command", "open_url",
+-    "profile_command", "vocab_request", "api_command", "vocab_watch", "vocab_unwatch", "models_command", "open_url"];
++    "profile_command", "vocab_request", "api_command", "vocab_watch", "vocab_unwatch", "models_command", "open_url",
 +    "list_window_apps" /* 0c-ime-mod */];
  
  fn main() {
      tauri_build::try_build(
 diff --git a/platforms/settings/capabilities/main.json b/platforms/settings/capabilities/main.json
-index 5965108..c686a7c 100644
+index 77bae46..9bb862e 100644
 --- a/platforms/settings/capabilities/main.json
 +++ b/platforms/settings/capabilities/main.json
-@@ -18,6 +18,7 @@
+@@ -19,6 +19,7 @@
      "allow-vocab-unwatch",
      "allow-models-command",
      "allow-open-url",
@@ -616,7 +615,7 @@ index 5965108..c686a7c 100644
      "core:event:allow-unlisten"
    ]
 diff --git a/platforms/settings/src/main.rs b/platforms/settings/src/main.rs
-index 301213d..2155143 100644
+index 7223d1b..05ab3ef 100644
 --- a/platforms/settings/src/main.rs
 +++ b/platforms/settings/src/main.rs
 @@ -4,6 +4,7 @@
@@ -627,12 +626,12 @@ index 301213d..2155143 100644
  mod updater;
  mod watch;
  
-@@ -302,7 +303,8 @@ fn main() {
+@@ -308,7 +309,8 @@ fn main() {
          .manage(watch::Watcher::default())
          .invoke_handler(tauri::generate_handler![
              app_info, get_status, get_settings, set_settings, check_update, download_update, install_update, export_summary,
--            vocab_request, api_command, vocab_watch, vocab_unwatch, models_command, open_url
-+            vocab_request, api_command, vocab_watch, vocab_unwatch, models_command, open_url,
+-            profile_command, vocab_request, api_command, vocab_watch, vocab_unwatch, models_command, open_url
++            profile_command, vocab_request, api_command, vocab_watch, vocab_unwatch, models_command, open_url,
 +            modapps::list_window_apps // 0c-ime-mod
          ])
          .setup(move |app| {
@@ -701,10 +700,10 @@ index 0000000..9623d5a
 +    }
 +}
 diff --git a/platforms/settings/src/updater.rs b/platforms/settings/src/updater.rs
-index e8924c1..a1c4978 100644
+index c6f6183..415a70d 100644
 --- a/platforms/settings/src/updater.rs
 +++ b/platforms/settings/src/updater.rs
-@@ -102,6 +102,15 @@ fn valid_value(value: &str) -> bool {
+@@ -105,6 +105,15 @@ fn valid_value(value: &str) -> bool {
              && value.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
  }
  
@@ -720,7 +719,7 @@ index e8924c1..a1c4978 100644
  /// 前端送來的設定修改：數量與字元都限制住，不讓任意字串變成 0c-update 的參數。
  /// 這只是第一道檢查；鍵是否存在、值是否合法由 0c-update 判斷。
  pub fn validate_pairs(pairs: &[(String, String)]) -> Result<(), String> {
-@@ -109,7 +118,7 @@ pub fn validate_pairs(pairs: &[(String, String)]) -> Result<(), String> {
+@@ -112,7 +121,7 @@ pub fn validate_pairs(pairs: &[(String, String)]) -> Result<(), String> {
          return Err("設定修改的數量不正確".to_string());
      }
      for (key, value) in pairs {
@@ -730,29 +729,29 @@ index e8924c1..a1c4978 100644
          }
      }
 diff --git a/platforms/settings/ui/app.js b/platforms/settings/ui/app.js
-index 48539aa..e006088 100644
+index be963b2..7add1ec 100644
 --- a/platforms/settings/ui/app.js
 +++ b/platforms/settings/ui/app.js
-@@ -416,7 +416,8 @@
-     const capsLock = items.find((item) => item.key === 'caps-lock-english'); // #173：鍵盤卡片最後；只有 Windows、Linux 有
-     const selectionKeys = items.find((item) => item.key === 'selection-keys'); // #112：跟鍵盤排列放在同一張卡
-     const rest = items.filter((item) => !item.key.startsWith('fuzzy-') && item.key !== 'keyboard-layout' && item.key !== 'selection-keys' && item.key !== 'ctrl-punctuation' && item.key !== 'caps-lock-english' &&
--      item.key !== 'output-simplified' && (!emoji || item.key !== 'emoji-equals-first'));
-+      item.key !== 'output-simplified' && (!emoji || item.key !== 'emoji-equals-first') &&
-+      !(window.ZcMod && window.ZcMod.keys.includes(item.key))); // 0c-ime-mod：改裝的兩項另外畫
-     const rows = rest.map((item) => {
+@@ -483,7 +483,8 @@
+     const emoji = items.find((item) => item.key === 'emoji-shortcut');
+     const equalsFirst = items.find((item) => item.key === 'emoji-equals-first');
+     const order = (item) => (spec.keys.includes(item.key) ? spec.keys.indexOf(item.key) : spec.keys.length);
+-    const mine = items.filter((item) => pageOfKey(item.key) === name && !item.key.startsWith('fuzzy-') && !(emoji && item === equalsFirst))
++    const mine = items.filter((item) => pageOfKey(item.key) === name && !item.key.startsWith('fuzzy-') && !(emoji && item === equalsFirst) &&
++      !(window.ZcMod && window.ZcMod.keys.includes(item.key))) // 0c-ime-mod：改裝的兩項另外畫
+       .map((item, i) => [order(item), i, item]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , item]) => item);
+     const rows = mine.map((item) => {
        const parent = itemRow(item, locked ||
-         (item.key === 'emoji-shortcut' && state.busy.has('emoji-equals-first')));
-@@ -426,6 +427,7 @@
+@@ -494,6 +495,7 @@
        return h('div', { class: 'setting-group', role: 'group', 'aria-labelledby': 'label-' + item.key }, parent, child);
      });
-     root.append(h('h2', {}, '選字與標點'), h('div', { class: 'card' }, ...rows));
-+    if (window.ZcMod) window.ZcMod.render(root, { h, row, itemRow, changePairs, invoke, toast, state, locked, rerender: render }); // 0c-ime-mod
+     if (rows.length) root.append(h('div', { class: 'card' }, ...rows));
++    if (name === 'mode' && window.ZcMod) window.ZcMod.render(root, { h, row, itemRow, changePairs, invoke, toast, state, locked, rerender: render }); // 0c-ime-mod
+     const fuzzy = name === 'candidates' ? items.filter((item) => item.key.startsWith('fuzzy-')) : [];
      if (fuzzy.length) {
        const enabled = fuzzy.some((item) => item.value !== 'off');
-       const name = h('span', {}, '模糊音');
 diff --git a/platforms/settings/ui/index.html b/platforms/settings/ui/index.html
-index 35433a2..3d17dfb 100644
+index 5546391..44385d7 100644
 --- a/platforms/settings/ui/index.html
 +++ b/platforms/settings/ui/index.html
 @@ -5,6 +5,7 @@
@@ -763,10 +762,10 @@ index 35433a2..3d17dfb 100644
  </head>
  <body>
  <div class="app">
-@@ -34,6 +35,7 @@
- <script src="engine-state.js"></script>
+@@ -41,6 +42,7 @@
  <script src="vocab.js"></script>
  <script src="models.js"></script>
+ <script src="input-styles.js"></script>
 +<script src="mod.js"></script>
  <script src="app.js"></script>
  </body>
@@ -931,10 +930,10 @@ index 0000000..eee7b8d
 +    }
 +}
 diff --git a/platforms/windows/tsf/src/service.rs b/platforms/windows/tsf/src/service.rs
-index d78de06..7e3b321 100644
+index 61e00da..cc3c748 100644
 --- a/platforms/windows/tsf/src/service.rs
 +++ b/platforms/windows/tsf/src/service.rs
-@@ -823,8 +823,8 @@ impl TextService_Impl {
+@@ -1017,8 +1017,8 @@ impl TextService_Impl {
          }
          let snap = {
              let mut st = self.state.borrow_mut();
@@ -946,27 +945,39 @@ index d78de06..7e3b321 100644
              if !st.composing {
                  st.session.handle(json!({"type": "display", "columns": 0}))
 diff --git a/platforms/windows/tsf/src/session.rs b/platforms/windows/tsf/src/session.rs
-index e901a21..ef62feb 100644
+index afdb2c9..9bc9ebc 100644
 --- a/platforms/windows/tsf/src/session.rs
 +++ b/platforms/windows/tsf/src/session.rs
-@@ -129,6 +129,8 @@ pub struct Session {
+@@ -138,10 +138,15 @@ pub struct Session {
      simplified: bool,
      // 上一次從引擎得知「輸出簡體字」的時間（health／open／快照）；換欄位時剛問過就不再問（refresh_simplified_after）。
      simplified_at: Option<Instant>,
++<<<<<<< HEAD
+     // 沒在組字時哪些鍵交給引擎（health 的 info，見 idle_key_from，#183）與它是在哪一代連線上問到的。設定一改引擎就重啟、
+     // 舊連線跟著斷，所以同一代、連線還在時沿用，不每按一個鍵就問一次 health（同 caps_generation）。
+     idle_info: Option<Value>,
+     idle_generation: u32,
++=======
 +    /// 0c-ime-mod：這個程式在「一律從英文開始的程式」清單裡（modapps.rs）。
 +    english_app: bool,
++>>>>>>> 改裝：切換中英時結束組字、一律從英文開始的程式、大寫字母後接注音
  }
  
  /// 重開 session（引擎重啟、斷線）時要不要送「設定模式」還原外殼記得的模式（#160）。新 session 從開始時的模式起：
-@@ -193,6 +195,7 @@ impl Session {
+@@ -206,8 +211,12 @@ impl Session {
              simplified_live: false,
              simplified: false,
              simplified_at: None,
++<<<<<<< HEAD
+             idle_info: None,
+             idle_generation: 0,
++=======
 +            english_app: false,
++>>>>>>> 改裝：切換中英時結束組字、一律從英文開始的程式、大寫字母後接注音
          }
      }
  
-@@ -275,9 +278,20 @@ impl Session {
+@@ -290,9 +299,20 @@ impl Session {
              self.english = english;
              self.caps_english = false; // 模式照引擎的（共用模式或開始時的）；Caps Lock 由下一個按鍵重新同步（#173）
          }
@@ -987,7 +998,7 @@ index e901a21..ef62feb 100644
      /// 目前的 session 是否可以送 #123 的新鍵名（Shift＋←／→、Shift＋Delete／Backspace）。
      /// 還沒開 session 或引擎不支援時為 false；沒在組字時這些鍵本來就交還應用程式，不需要查。
      pub fn vocab_keys(&self) -> bool {
-@@ -423,6 +437,13 @@ impl Session {
+@@ -463,6 +483,13 @@ impl Session {
          self.caps_lock_english = reply["info"]["caps_lock_english"] == "true";
          self.caps_generation = self.generation;
          self.learn_simplified(&reply["info"]);

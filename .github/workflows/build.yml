@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: build
@@ -80,10 +81,24 @@ jobs:
         with:
           path: mod
       - name: 取得官方原始碼並套用改裝
+        id: apply
         run: |
           git clone --quiet --depth 1 --branch "$TAG" "$UPSTREAM" src
           cd src
           git -c user.name=mod -c user.email=mod@localhost am --3way ../mod/patches/*.patch
+      # patch 套不上（官方改到同一段程式）：開一個 Issue，GitHub 會寄信通知；同一版只開一次。
+      - name: 通知需要更新 patch
+        if: failure() && steps.apply.conclusion == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="官方 $TAG 改到改裝的程式碼，需要更新 patch"
+          if ! gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq '.[0].number' | grep -q .; then
+            files=$(cd src && git diff --name-only --diff-filter=U | sed 's/^/- /')
+            printf '官方發布了 %s，但 patches/ 套不上去，改裝版停在上一版（照常能用）。\n\n衝突的檔案：\n%s\n\n把這個 Issue 交給 Claude 更新 patch 即可。\n\n工作流程：%s/%s/actions/runs/%s\n' \
+              "$TAG" "$files" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue.md
+          fi
       - uses: actions/setup-go@v5
         with:
           go-version-file: src/go.mod
