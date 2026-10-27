@@ -18,10 +18,10 @@
 irm https://raw.githubusercontent.com/IvesNash/0c-ime-mod/main/install-mod.ps1 | iex
 ```
 
-安裝後會建立 Windows 排程「0c-ime-mod 自動更新」：每天 12:30 與登入時檢查，有新的改裝版就自動安裝（紀錄在 `%LOCALAPPDATA%\0c-ime-mod\update.log`）。0c 內建的官方自動更新會改成手動，免得官方版蓋掉改裝版。
+安裝後會建立 Windows 排程「0c-ime-mod 自動更新」：每 2 小時與登入時檢查，有新的改裝版就自動安裝；在設定程式手動裝了官方同版、蓋掉改裝版時，也會自動裝回改裝版（紀錄在 `%LOCALAPPDATA%\0c-ime-mod\update.log`）。0c 內建的官方自動更新會改成手動，免得官方版蓋掉改裝版。
 
 - 取消自動更新：`powershell -File $env:LOCALAPPDATA\0c-ime-mod\install-mod.ps1 -RemoveSchedule`
-- 回到官方版：從官網重新安裝；排程看到不是改裝版就不會再更新。
+- 回到官方版：先取消自動更新（上一行），再從官網重新安裝。
 
 ## 運作方式
 

@@ -2,7 +2,7 @@
 #
 #   手動安裝／更新：irm https://raw.githubusercontent.com/IvesNash/0c-ime-mod/main/install-mod.ps1 | iex
 #   自動更新（排程呼叫）：install-mod.ps1 -Auto
-#     只在目前裝的是改裝版（版本含 -mod.）而且有新版時才安裝；裝回官方版之後自動停止。
+#     有新的改裝版就安裝；官方同版蓋掉改裝版時也會裝回改裝版。要回到官方版請先 -RemoveSchedule。
 #   取消自動更新：install-mod.ps1 -RemoveSchedule
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -45,9 +45,19 @@ try {
 }
 $latest = $release.tag_name -replace '^v', ''
 
+# 版本的數字部分（0.2.6-mod.2 → 0.2.6）。
+function BaseVersion($v) { try { [version](($v -split '-')[0]) } catch { $null } }
+
 if ($Auto) {
-    if (-not $installed -or $installed -notlike "*-mod.*") { Log "目前不是改裝版（$installed），不自動更新"; return }
+    if (-not $installed) { Log "找不到已安裝的靈犀注音，不自動更新"; return }
     if ($installed -eq $latest) { return }
+    # 官方版蓋掉了改裝版（例如在設定程式按了更新）：官方版不比改裝版的基礎版本新時，自動把改裝版裝回去。
+    # 官方版比較新時，等 GitHub 做出對應的改裝版再裝。
+    if ($installed -notlike "*-mod.*") {
+        $mine = BaseVersion $installed; $theirs = BaseVersion $latest
+        if (-not $mine -or -not $theirs -or $mine -gt $theirs) { Log "目前是官方版 $installed，改裝版 $latest 還沒跟上，先不更新"; return }
+        Log "官方版 $installed 蓋掉了改裝版，裝回改裝版"
+    }
 } elseif ($installed -eq $latest) {
     Write-Host "已經是最新的改裝版 $latest。"
 }
@@ -86,12 +96,16 @@ $self = Join-Path $ModDir "install-mod.ps1"
 $updater = Join-Path $Zuin "bin\0c-update.exe"
 $steps = @()
 if ($install) {
-    $steps += "& '$($install.FullName)' -Channel internal-preview"
+    # 改裝版的版本號（0.2.6-mod.2）照版本規則比官方同版（0.2.6）舊，要明確允許「降級」。
+    $bundleDir = $install.Directory.FullName
+    $bundleUpdater = Join-Path $bundleDir "0c-update.exe"
+    $steps += "& '$bundleUpdater' install -bundle '$bundleDir' -channel internal-preview -allow-downgrade; if (`$LASTEXITCODE -ne 0) { throw '安裝失敗，請查看上方錯誤' }"
 }
 $steps += "if (Test-Path '$updater') { & '$updater' mode manual | Out-Null }"
 $steps += @"
 `$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "$self" -Auto'
-`$triggers = @((New-ScheduledTaskTrigger -Daily -At 12:30), (New-ScheduledTaskTrigger -AtLogOn -User '$env:USERDOMAIN\$env:USERNAME'))
+`$every = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddHours(12).AddMinutes(30) -RepetitionInterval (New-TimeSpan -Hours 2) -RepetitionDuration (New-TimeSpan -Days 3650)
+`$triggers = @(`$every, (New-ScheduledTaskTrigger -AtLogOn -User '$env:USERDOMAIN\$env:USERNAME'))
 `$principal = New-ScheduledTaskPrincipal -UserId '$env:USERDOMAIN\$env:USERNAME' -LogonType Interactive -RunLevel Highest
 `$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
 Register-ScheduledTask -TaskName '$TaskName' -Action `$action -Trigger `$triggers -Principal `$principal -Settings `$settings -Force | Out-Null
@@ -109,12 +123,12 @@ try {
 if ($admin) {
     foreach ($step in $steps) { Invoke-Expression $step }
     if ($install) { Log "改裝版 $latest 安裝完成" }
-    if (-not $Auto) { Write-Host "完成。之後每天 12:30 與登入時會自動檢查改裝版更新（紀錄：$LogFile）。" }
+    if (-not $Auto) { Write-Host "完成。之後每 2 小時與登入時會自動檢查改裝版更新（紀錄：$LogFile）。" }
 } elseif ($Auto) {
     Log "沒有系統管理員權限，略過自動更新"
 } else {
     $script = Join-Path $ModDir "admin-steps.ps1"
-    $body = ($steps -join "`r`n") + "`r`nWrite-Host '完成，之後每天 12:30 與登入時會自動檢查改裝版更新。'`r`nRead-Host '按 Enter 結束'"
+    $body = ($steps -join "`r`n") + "`r`nWrite-Host '完成，之後每 2 小時與登入時會自動檢查改裝版更新。'`r`nRead-Host '按 Enter 結束'"
     [IO.File]::WriteAllText($script, $body, (New-Object Text.UTF8Encoding $true))
     Write-Host "需要系統管理員權限，請在跳出的視窗按「是」。"
     Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script)
