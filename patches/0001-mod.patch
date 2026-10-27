@@ -1,48 +1,50 @@
-From 5dd0e44db8de0a2142e5882bbd0e1d795d5fa2be Mon Sep 17 00:00:00 2001
+From 92a3d36bd7219bc139922eb640e9f33083e981fe Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
 Date: Wed, 21 Oct 2026 14:43:56 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
  =?UTF-8?q?=E4=B8=AD=E8=8B=B1=E6=99=82=E7=B5=90=E6=9D=9F=E7=B5=84=E5=AD=97?=
  =?UTF-8?q?=E3=80=81=E4=B8=80=E5=BE=8B=E5=BE=9E=E8=8B=B1=E6=96=87=E9=96=8B?=
  =?UTF-8?q?=E5=A7=8B=E7=9A=84=E7=A8=8B=E5=BC=8F=E3=80=81=E5=A4=A7=E5=AF=AB?=
- =?UTF-8?q?=E5=AD=97=E6=AF=8D=E5=BE=8C=E6=8E=A5=E6=B3=A8=E9=9F=B3?=
+ =?UTF-8?q?=E5=AD=97=E6=AF=8D=E5=BE=8C=E6=8E=A5=E6=B3=A8=E9=9F=B3=E3=80=81?=
+ =?UTF-8?q?Shift=EF=BC=8B-=20=E6=89=93=E5=8D=8A=E5=BD=A2=E5=BA=95=E7=B7=9A?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 - 引擎：EndOnToggle（預設開）單按 Shift 切換時送出已組好的字、清掉沒打完的注音，組字區關閉
 - 引擎：中英混打時單一個大寫字母後面接注音會切開（輸入P的話：P2k7cj84 → P的話）
+- 引擎：HalfUnderscore（預設開）中文模式 Shift＋- 打半形 _，不是破折號
 - 外殼：english_apps 清單裡的程式從英文開始，英文模式不做自動補字
-- 設定：兩項存在 settings.json 的保留欄位，官方版會原樣保留
+- 設定：改裝的設定存在 settings.json 的保留欄位，官方版會原樣保留，也不列為不認得的欄位
 - 設定程式：「中英切換（改裝）」卡片與「從開著的程式挑選」
 ---
- cmd/0c-server/main.go                     |   4 +
- cmd/0c-update/main.go                     |   3 +
- core/engine/engine.go                     |   2 +
+ cmd/0c-server/main.go                     |   5 +
+ cmd/0c-update/main.go                     |   4 +
+ core/engine/engine.go                     |   4 +
  core/session/mixed.go                     |   4 +
- core/session/mod_mixed.go                 |  40 +++++++
+ core/session/mod_mixed.go                 |  40 ++++++
  core/session/mod_mixed_test.go            |  39 ++++++
- core/session/mod_toggle.go                |  19 +++
- core/session/mod_toggle_test.go           |  84 +++++++++++++
- core/session/session.go                   |   6 +
- internal/settings/mod.go                  | 137 ++++++++++++++++++++++
- internal/settings/mod_test.go             |  56 +++++++++
- internal/settings/settings.go             |   6 +
+ core/session/mod_toggle.go                |  30 ++++
+ core/session/mod_toggle_test.go           | 111 +++++++++++++++
+ core/session/session.go                   |  10 ++
+ internal/settings/mod.go                  | 159 ++++++++++++++++++++++
+ internal/settings/mod_test.go             |  56 ++++++++
+ internal/settings/settings.go             |   7 +
  internal/settings/settings_test.go        |   2 +-
  platforms/settings/build.rs               |   3 +-
  platforms/settings/capabilities/main.json |   1 +
  platforms/settings/src/main.rs            |   4 +-
- platforms/settings/src/modapps.rs         |  57 +++++++++
+ platforms/settings/src/modapps.rs         |  57 ++++++++
  platforms/settings/src/updater.rs         |  11 +-
  platforms/settings/ui/app.js              |   4 +-
  platforms/settings/ui/index.html          |   2 +
- platforms/settings/ui/mod.css             |  15 +++
- platforms/settings/ui/mod.js              |  83 +++++++++++++
+ platforms/settings/ui/mod.css             |  15 ++
+ platforms/settings/ui/mod.js              |  85 ++++++++++++
  platforms/windows/tsf/src/lib.rs          |   1 +
  platforms/windows/tsf/src/modapps.rs      |  31 +++++
  platforms/windows/tsf/src/service.rs      |   4 +-
- platforms/windows/tsf/src/session.rs      |  21 ++++
- 26 files changed, 632 insertions(+), 7 deletions(-)
+ platforms/windows/tsf/src/session.rs      |  21 +++
+ 26 files changed, 703 insertions(+), 7 deletions(-)
  create mode 100644 core/session/mod_mixed.go
  create mode 100644 core/session/mod_mixed_test.go
  create mode 100644 core/session/mod_toggle.go
@@ -55,18 +57,19 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 platforms/windows/tsf/src/modapps.rs
 
 diff --git a/cmd/0c-server/main.go b/cmd/0c-server/main.go
-index bcf47d7..e69486e 100644
+index bcf47d7..bc0ce22 100644
 --- a/cmd/0c-server/main.go
 +++ b/cmd/0c-server/main.go
-@@ -151,6 +151,7 @@ func serve() string {
+@@ -151,6 +151,8 @@ func serve() string {
  	eng.MixedInput = config.MixedInput
  	eng.Toneless = config.Toneless // #150：開啟時 session 停用混打的自動判斷；health 的 mixed_input 照設定檔回報
  	eng.EnglishAutocomplete = config.EnglishAutocomplete
 +	eng.EndOnToggle = config.EndOnToggle() // 0c-ime-mod
++	eng.HalfUnderscore = config.HalfUnderscore()
  	eng.CandidateBeforeCursor = config.CandidateCursor == "before"
  	eng.EmojiShortcut = config.EmojiShortcut
  	eng.EmojiEqualsFirst = config.EmojiEqualsFirst
-@@ -468,6 +469,9 @@ func serve() string {
+@@ -468,6 +470,9 @@ func serve() string {
  	if punctuationSource != "" {
  		srv.Info["punctuation_source"] = punctuationSource
  	}
@@ -77,36 +80,39 @@ index bcf47d7..e69486e 100644
  	srv.Info["english_pack"] = eng.EnglishPack
  	if eng.EnglishPack == "" {
 diff --git a/cmd/0c-update/main.go b/cmd/0c-update/main.go
-index 4d38754..1bf3c4b 100644
+index 4d38754..4937123 100644
 --- a/cmd/0c-update/main.go
 +++ b/cmd/0c-update/main.go
-@@ -103,6 +103,9 @@ func listSettings(w io.Writer, r settings.Report, path string) {
+@@ -103,6 +103,10 @@ func listSettings(w io.Writer, r settings.Report, path string) {
  	for _, p := range fuzzy.Pairs() {
  		fmt.Fprintf(w, "fuzzy-%s=%s（%s 模糊音：off 關閉；select 開候選時合併近音；auto 另在語境明顯支持近音時自動改字，實驗）\n", p.ID(), fuzzyConfig.Mode(p), p.Symbols())
  	}
 +	// 0c-ime-mod
 +	fmt.Fprintf(w, "%s=%s（切換中英時結束組字）\n%s=%s（一律從英文開始的程式，以 | 分隔）\n",
 +		settings.ModEndOnToggleItem, onOff(s.EndOnToggle()), settings.ModEnglishAppsItem, s.EnglishAppsJoined())
++	fmt.Fprintf(w, "%s=%s（中文模式 Shift＋- 打半形 _）\n", settings.ModUnderscoreItem, onOff(s.HalfUnderscore()))
  }
  
  func isJSONFlag(arg string) bool { return arg == "-json" || arg == "--json" }
 diff --git a/core/engine/engine.go b/core/engine/engine.go
-index eccbe30..4783d5b 100644
+index eccbe30..ed3c95b 100644
 --- a/core/engine/engine.go
 +++ b/core/engine/engine.go
-@@ -43,6 +43,7 @@ type Engine struct {
+@@ -43,6 +43,8 @@ type Engine struct {
  	Fuzzy                 fuzzy.Config      // 使用者逐對啟用的模糊音；零值全部關閉。
  	Toneless              bool              // 「不打聲調也能選字」開著時由宿主設定（#150）；開啟時停用中英混打的自動判斷。
  	EnglishAutocomplete   bool
 +	EndOnToggle           bool                // 0c-ime-mod：切換中英時結束組字
++	HalfUnderscore        bool                // 0c-ime-mod：Shift＋- 打半形 _
  	MixedInput            bool                // opt-in bilingual keys; disabled preserves legacy behavior.
  	English               *english.Dictionary // nil uses the authored prototype vocabulary.
  	EnglishPack           string              // host-supplied pack version for diagnostics; empty means prototype.
-@@ -125,6 +126,7 @@ func (e *Engine) OpenSession() uint64 {
+@@ -125,6 +127,8 @@ func (e *Engine) OpenSession() uint64 {
  	e.sessions[e.next].Fuzzy = e.Fuzzy
  	e.sessions[e.next].Toneless = e.Toneless
  	e.sessions[e.next].EnglishAutocomplete = e.EnglishAutocomplete
 +	e.sessions[e.next].EndOnToggle = e.EndOnToggle // 0c-ime-mod
++	e.sessions[e.next].HalfUnderscore = e.HalfUnderscore
  	e.sessions[e.next].MixedInput = e.MixedInput
  	e.sessions[e.next].EmojiShortcut = e.EmojiShortcut
  	e.sessions[e.next].EmojiEqualsFirst = e.EmojiEqualsFirst
@@ -218,10 +224,10 @@ index 0000000..c264424
 +}
 diff --git a/core/session/mod_toggle.go b/core/session/mod_toggle.go
 new file mode 100644
-index 0000000..229893c
+index 0000000..7d8ecee
 --- /dev/null
 +++ b/core/session/mod_toggle.go
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,30 @@
 +package session
 +
 +// 0c-ime-mod：切換中英時結束組字。
@@ -241,12 +247,23 @@ index 0000000..229893c
 +	}
 +	return s.commit()
 +}
++
++// modUnderscore：中文模式按 Shift＋- 打半形「_」（檔名、程式識別字常用），不是官方預設的破折號「——」。
++// 跟其他標點一樣留在組字區、插在游標處。回傳是否已處理。
++func (s *Session) modUnderscore(k string) bool {
++	if !s.HalfUnderscore || k != "_" || s.english || s.cand != nil {
++		return false
++	}
++	s.insertPendingLiteral()
++	s.insertLiteral("_")
++	return true
++}
 diff --git a/core/session/mod_toggle_test.go b/core/session/mod_toggle_test.go
 new file mode 100644
-index 0000000..49d42f0
+index 0000000..ef7839c
 --- /dev/null
 +++ b/core/session/mod_toggle_test.go
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,111 @@
 +package session
 +
 +import (
@@ -331,19 +348,47 @@ index 0000000..49d42f0
 +		t.Fatalf("mode 請求不送出：%+v", snap)
 +	}
 +}
++
++func TestModHalfUnderscore(t *testing.T) {
++	s := newSession()
++	s.HalfUnderscore = true
++	typeSyl(s, "ㄨㄛˇ")
++	if got := key(s, "_").Text(); got != "我_" {
++		t.Fatalf("Shift＋- 應是半形 _：%q", got)
++	}
++	idle := newSession()
++	idle.HalfUnderscore = true
++	if snap := key(idle, "_"); !snap.Handled || snap.Text() != "_" {
++		t.Fatalf("沒在組字時也是 _：%+v", snap)
++	}
++	off := newSession()
++	typeSyl(off, "ㄨㄛˇ")
++	if got := key(off, "_").Text(); got != "我——" {
++		t.Fatalf("關閉時照官方的破折號：%q", got)
++	}
++	mixed := mixedSession()
++	mixed.HalfUnderscore = true
++	for _, k := range []string{"u", "s", "e", "r", "_", "i", "d", " "} {
++		key(mixed, k)
++	}
++	if got := mixed.snapshot().Text(); got != "user_id " && got != "user_id" {
++		t.Fatalf("混打的識別字照字面：%q", got)
++	}
++}
 diff --git a/core/session/session.go b/core/session/session.go
-index b75666a..cf70c2e 100644
+index b75666a..b8d85bf 100644
 --- a/core/session/session.go
 +++ b/core/session/session.go
-@@ -109,6 +109,7 @@ type Session struct {
+@@ -109,6 +109,8 @@ type Session struct {
  	Toneless bool
  	// MixedInput is opt-in; English is a shared, immutable vocabulary.
  	EnglishAutocomplete   bool
 +	EndOnToggle           bool // 0c-ime-mod：切換中英時結束組字（mod_toggle.go）
++	HalfUnderscore        bool // 0c-ime-mod：Shift＋- 打半形 _，不是破折號（mod_toggle.go）
  	MixedInput            bool
  	English               *english.Dictionary
  	EmojiShortcut         string
-@@ -365,6 +366,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
+@@ -365,6 +367,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
  		}
  		// 使用者自己切換或外殼設定模式之後，關掉 Caps Lock 不再改變模式（#173）。
  		s.capsEnglish = false
@@ -355,12 +400,22 @@ index b75666a..cf70c2e 100644
  		s.setMode(english, r.Type == proto.Toggle && r.Restore, stash)
  	case proto.CapsLock:
  		handled, commit = s.capsLockChanged(r.On)
+@@ -764,6 +771,9 @@ func (s *Session) key(k string) (handled bool, commit string) {
+ 			return true, ""
+ 		}
+ 	}
++	if s.modUnderscore(k) { // 0c-ime-mod：Shift＋- 打半形 _（mod_toggle.go）
++		return true, ""
++	}
+ 	// 標點保留在組字區，可移動、替換候選；Enter 才提交。
+ 	if p, ok := s.layout.Punct(runes[0]); ok {
+ 		s.insertPendingLiteral()
 diff --git a/internal/settings/mod.go b/internal/settings/mod.go
 new file mode 100644
-index 0000000..aa8d054
+index 0000000..fb05b5d
 --- /dev/null
 +++ b/internal/settings/mod.go
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,159 @@
 +package settings
 +
 +// 0c-ime-mod：個人改裝的兩項設定，存在設定檔的保留成員（extra）裡，不改原本的結構與讀寫流程。
@@ -376,6 +431,8 @@ index 0000000..aa8d054
 +const (
 +	modEndOnToggleKey  = "end_composition_on_toggle" // 設定檔欄位
 +	modEnglishAppsKey  = "english_apps"
++	modUnderscoreKey   = "half_underscore"
++	ModUnderscoreItem  = "half-underscore"
 +	ModEndOnToggleItem = "end-composition-on-toggle" // 命令列／設定程式的鍵
 +	ModEnglishAppsItem = "english-apps"
 +	modMaxApps         = 64
@@ -408,6 +465,19 @@ index 0000000..aa8d054
 +// EndOnToggle：單按 Shift 切換中英時結束組字（送出已組好的字、清掉沒打完的注音）。預設開啟。
 +func (s Settings) EndOnToggle() bool {
 +	raw, ok := s.modExtra()[modEndOnToggleKey]
++	if !ok {
++		return true
++	}
++	var v bool
++	if json.Unmarshal(raw, &v) != nil {
++		return true
++	}
++	return v
++}
++
++// HalfUnderscore：中文模式 Shift＋- 打半形 _。預設開啟。
++func (s Settings) HalfUnderscore() bool {
++	raw, ok := s.modExtra()[modUnderscoreKey]
 +	if !ok {
 +		return true
 +	}
@@ -460,6 +530,8 @@ index 0000000..aa8d054
 +	return []spec{
 +		{ModEndOnToggleItem, "切換中英時結束組字", "切換時關掉懸浮視窗，之後按鍵直接給程式", "on", []string{"on", "off"},
 +			func(s Settings) string { return onOff(s.EndOnToggle()) }},
++		{ModUnderscoreItem, "Shift＋- 打底線 _", "中文模式打半形底線，不是破折號——", "on", []string{"on", "off"},
++			func(s Settings) string { return onOff(s.HalfUnderscore()) }},
 +		// 值是以 | 分隔的執行檔名稱；設定程式另外畫成清單。
 +		{ModEnglishAppsItem, "一律從英文開始的程式", "這些程式一開就是英文，打中文再按 Shift", "", []string{""},
 +			func(s Settings) string { return strings.Join(s.EnglishApps(), "|") }},
@@ -474,6 +546,11 @@ index 0000000..aa8d054
 +			return true, &SetError{Code: CodeInvalidValue, Key: key, Msg: key + " 只接受 on 或 off"}
 +		}
 +		return true, s.modSetExtra(modEndOnToggleKey, value == "on")
++	case ModUnderscoreItem:
++		if value != "on" && value != "off" {
++			return true, &SetError{Code: CodeInvalidValue, Key: key, Msg: key + " 只接受 on 或 off"}
++		}
++		return true, s.modSetExtra(modUnderscoreKey, value == "on")
 +	case ModEnglishAppsItem:
 +		var list []string
 +		if strings.TrimSpace(value) != "" && value != "none" {
@@ -561,19 +638,20 @@ index 0000000..69c2638
 +	}
 +}
 diff --git a/internal/settings/settings.go b/internal/settings/settings.go
-index e200a30..9efec5d 100644
+index e200a30..0bede00 100644
 --- a/internal/settings/settings.go
 +++ b/internal/settings/settings.go
-@@ -519,6 +519,8 @@ func (s Settings) notes() []string {
+@@ -519,6 +519,9 @@ func (s Settings) notes() []string {
  	if s.extra != "" {
  		_ = json.Unmarshal([]byte(s.extra), &kept)
  	}
 +	delete(kept, modEndOnToggleKey) // 0c-ime-mod：改裝的兩項存在保留欄位，不是「不認得」
 +	delete(kept, modEnglishAppsKey)
++	delete(kept, modUnderscoreKey)
  	for _, key := range []string{"selection", "punctuation", "document_context", "mixed_input", "english_autocomplete", "left_shift", "esc_clear", "space_selects", "candidate_cursor", "advance_after_select", "candidate_layout", "emoji_shortcut", "emoji_equals_first", "keyboard_layout", "selection_keys", "toggle_key", "mode_memory", "start_mode", "output_simplified", "simplified_hotkey", "ctrl_punctuation", "caps_lock_english", "toneless"} {
  		if raw, ok := kept[key]; ok {
  			out = append(out, fmt.Sprintf("%s：本版不認得 %s，暫用預設值，存檔時保留原值", strings.ReplaceAll(key, "_", "-"), raw))
-@@ -852,6 +854,7 @@ func specs() []spec {
+@@ -852,6 +855,7 @@ func specs() []spec {
  		r := r
  		out = append(out, spec{r.key, r.label, r.description, r.get(inputstyleDefaultRules()), r.values, func(s Settings) string { return r.get(s.ProfileRules()) }})
  	}
@@ -581,7 +659,7 @@ index e200a30..9efec5d 100644
  	return out
  }
  
-@@ -1051,6 +1054,9 @@ func (s *Settings) set(key, value string) error {
+@@ -1051,6 +1055,9 @@ func (s *Settings) set(key, value string) error {
  	if s.profileLocked(key) {
  		return &SetError{Code: "locked_by_profile", Key: key, Msg: "此項由選用的輸入習慣固定；請先複製成自訂"}
  	}
@@ -808,15 +886,15 @@ index 0000000..9493ad4
 +.mod-pick .desc { color: var(--muted); font-size: 12px; }
 diff --git a/platforms/settings/ui/mod.js b/platforms/settings/ui/mod.js
 new file mode 100644
-index 0000000..be45385
+index 0000000..fc06928
 --- /dev/null
 +++ b/platforms/settings/ui/mod.js
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,85 @@
 +// 0c-ime-mod：輸入設定頁的「中英切換（改裝）」卡片——切換時結束組字、一律從英文開始的程式。
 +// app.js 只呼叫 ZcMod.keys 與 ZcMod.render；其他都在這裡，官方更新時比較不會衝突。
 +(function () {
 +  'use strict';
-+  const KEYS = ['end-composition-on-toggle', 'english-apps'];
++  const KEYS = ['end-composition-on-toggle', 'half-underscore', 'english-apps'];
 +  let picker = null; // { loading, apps: [{exe,title}], error }
 +
 +  function splitApps(value) {
@@ -827,15 +905,17 @@ index 0000000..be45385
 +    const { h, row, itemRow, changePairs, invoke, toast, state, locked, rerender } = ctx;
 +    const items = (state.settings && state.settings.items) || [];
 +    const endItem = items.find((item) => item.key === KEYS[0]);
-+    const appsItem = items.find((item) => item.key === KEYS[1]);
++    const underscoreItem = items.find((item) => item.key === KEYS[1]);
++    const appsItem = items.find((item) => item.key === KEYS[2]);
 +    if (!endItem && !appsItem) return;
 +    const card = h('div', { class: 'card' });
 +    if (endItem) card.append(itemRow(endItem, locked));
++    if (underscoreItem) card.append(itemRow(underscoreItem, locked));
 +    if (appsItem) card.append(appsBlock(appsItem));
 +    root.append(h('h2', {}, '中英切換（改裝）'), card);
 +
 +    function save(list) {
-+      return changePairs([[KEYS[1], list.length ? list.join('|') : 'none']]);
++      return changePairs([[KEYS[2], list.length ? list.join('|') : 'none']]);
 +    }
 +
 +    function appsBlock(item) {
