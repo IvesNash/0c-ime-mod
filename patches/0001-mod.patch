@@ -1,4 +1,4 @@
-From a27af0a57f6131d469ce1e1f7da1b38de1583dd3 Mon Sep 17 00:00:00 2001
+From 5dd0e44db8de0a2142e5882bbd0e1d795d5fa2be Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
 Date: Wed, 21 Oct 2026 14:43:56 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
@@ -26,8 +26,8 @@ Content-Transfer-Encoding: 8bit
  core/session/mod_toggle_test.go           |  84 +++++++++++++
  core/session/session.go                   |   6 +
  internal/settings/mod.go                  | 137 ++++++++++++++++++++++
- internal/settings/mod_test.go             |  50 ++++++++
- internal/settings/settings.go             |   4 +
+ internal/settings/mod_test.go             |  56 +++++++++
+ internal/settings/settings.go             |   6 +
  internal/settings/settings_test.go        |   2 +-
  platforms/settings/build.rs               |   3 +-
  platforms/settings/capabilities/main.json |   1 +
@@ -42,7 +42,7 @@ Content-Transfer-Encoding: 8bit
  platforms/windows/tsf/src/modapps.rs      |  31 +++++
  platforms/windows/tsf/src/service.rs      |   4 +-
  platforms/windows/tsf/src/session.rs      |  21 ++++
- 26 files changed, 624 insertions(+), 7 deletions(-)
+ 26 files changed, 632 insertions(+), 7 deletions(-)
  create mode 100644 core/session/mod_mixed.go
  create mode 100644 core/session/mod_mixed_test.go
  create mode 100644 core/session/mod_toggle.go
@@ -500,14 +500,15 @@ index 0000000..aa8d054
 +func (s Settings) EnglishAppsJoined() string { return strings.Join(s.EnglishApps(), "|") }
 diff --git a/internal/settings/mod_test.go b/internal/settings/mod_test.go
 new file mode 100644
-index 0000000..60cbd8a
+index 0000000..69c2638
 --- /dev/null
 +++ b/internal/settings/mod_test.go
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,56 @@
 +package settings
 +
 +import (
 +	"path/filepath"
++	"strings"
 +	"testing"
 +)
 +
@@ -534,6 +535,11 @@ index 0000000..60cbd8a
 +	if got.EndOnToggle() {
 +		t.Fatal("關閉後存檔再讀應為 off")
 +	}
++	for _, note := range r.Notes {
++		if strings.Contains(note, "english_apps") || strings.Contains(note, "end_composition_on_toggle") {
++			t.Fatalf("改裝的欄位不該出現在「不認得的欄位」提示：%q", note)
++		}
++	}
 +	if apps := got.EnglishApps(); len(apps) != 2 || apps[0] != "AfterFX.exe" || apps[1] != "Adobe Premiere Pro.exe" {
 +		t.Fatalf("清單去掉路徑與重複：%q", apps)
 +	}
@@ -555,10 +561,19 @@ index 0000000..60cbd8a
 +	}
 +}
 diff --git a/internal/settings/settings.go b/internal/settings/settings.go
-index e200a30..9ad43d1 100644
+index e200a30..9efec5d 100644
 --- a/internal/settings/settings.go
 +++ b/internal/settings/settings.go
-@@ -852,6 +852,7 @@ func specs() []spec {
+@@ -519,6 +519,8 @@ func (s Settings) notes() []string {
+ 	if s.extra != "" {
+ 		_ = json.Unmarshal([]byte(s.extra), &kept)
+ 	}
++	delete(kept, modEndOnToggleKey) // 0c-ime-mod：改裝的兩項存在保留欄位，不是「不認得」
++	delete(kept, modEnglishAppsKey)
+ 	for _, key := range []string{"selection", "punctuation", "document_context", "mixed_input", "english_autocomplete", "left_shift", "esc_clear", "space_selects", "candidate_cursor", "advance_after_select", "candidate_layout", "emoji_shortcut", "emoji_equals_first", "keyboard_layout", "selection_keys", "toggle_key", "mode_memory", "start_mode", "output_simplified", "simplified_hotkey", "ctrl_punctuation", "caps_lock_english", "toneless"} {
+ 		if raw, ok := kept[key]; ok {
+ 			out = append(out, fmt.Sprintf("%s：本版不認得 %s，暫用預設值，存檔時保留原值", strings.ReplaceAll(key, "_", "-"), raw))
+@@ -852,6 +854,7 @@ func specs() []spec {
  		r := r
  		out = append(out, spec{r.key, r.label, r.description, r.get(inputstyleDefaultRules()), r.values, func(s Settings) string { return r.get(s.ProfileRules()) }})
  	}
@@ -566,7 +581,7 @@ index e200a30..9ad43d1 100644
  	return out
  }
  
-@@ -1051,6 +1052,9 @@ func (s *Settings) set(key, value string) error {
+@@ -1051,6 +1054,9 @@ func (s *Settings) set(key, value string) error {
  	if s.profileLocked(key) {
  		return &SetError{Code: "locked_by_profile", Key: key, Msg: "此項由選用的輸入習慣固定；請先複製成自訂"}
  	}

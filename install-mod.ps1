@@ -37,11 +37,18 @@ if (Test-Path $receipt) {
     try { $installed = (Get-Content $receipt -Raw -Encoding UTF8 | ConvertFrom-Json).version } catch { }
 }
 
-try {
-    $release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "0c-ime-mod" }
-} catch {
-    Log "無法取得最新版本：$($_.Exception.Message)"
-    if ($Auto) { return } else { throw }
+# 開機剛登入時網路可能還沒好：自動更新最多等 3 分鐘再放棄。
+$release = $null
+for ($try = 1; -not $release; $try++) {
+    try {
+        $release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "0c-ime-mod" }
+    } catch {
+        if (-not $Auto -or $try -ge 6) {
+            Log "無法取得最新版本：$($_.Exception.Message)"
+            if ($Auto) { return } else { throw }
+        }
+        Start-Sleep -Seconds 30
+    }
 }
 $latest = $release.tag_name -replace '^v', ''
 
@@ -114,15 +121,26 @@ Register-ScheduledTask -TaskName '$TaskName' -Action `$action -Trigger `$trigger
 # 把這個腳本存一份在本機，排程執行的是這份（每次安裝都更新成最新的）。
 New-Item -ItemType Directory -Force -Path $ModDir | Out-Null
 try {
-    $source = Invoke-WebRequest "https://raw.githubusercontent.com/$Repo/main/install-mod.ps1" -UseBasicParsing
+    # 用 API 取，不經過 raw.githubusercontent.com 的快取（剛推上去的幾分鐘內會拿到舊版）。
+    $source = Invoke-WebRequest "https://api.github.com/repos/$Repo/contents/install-mod.ps1" -UseBasicParsing `
+        -Headers @{ "User-Agent" = "0c-ime-mod"; "Accept" = "application/vnd.github.raw" }
     [IO.File]::WriteAllText($self, [Text.Encoding]::UTF8.GetString($source.RawContentStream.ToArray()), (New-Object Text.UTF8Encoding $true))
 } catch {
     if ($PSCommandPath -and $PSCommandPath -ne $self) { Copy-Item $PSCommandPath $self -Force }
 }
 
+# 安裝是否真的成功：看安裝收據的版本有沒有換成改裝版。
+function CheckInstalled {
+    if (-not $install) { return }
+    $now = $null
+    try { $now = (Get-Content $receipt -Raw -Encoding UTF8 | ConvertFrom-Json).version } catch { }
+    if ($now -eq $latest) { Log "改裝版 $latest 安裝完成" }
+    else { Log "改裝版 $latest 安裝失敗（目前仍是 $now），請把安裝視窗的錯誤訊息截圖" }
+}
+
 if ($admin) {
-    foreach ($step in $steps) { Invoke-Expression $step }
-    if ($install) { Log "改裝版 $latest 安裝完成" }
+    try { foreach ($step in $steps) { Invoke-Expression $step } } catch { Log "安裝過程出錯：$($_.Exception.Message)" }
+    CheckInstalled
     if (-not $Auto) { Write-Host "完成。之後每 2 小時與登入時會自動檢查改裝版更新（紀錄：$LogFile）。" }
 } elseif ($Auto) {
     Log "沒有系統管理員權限，略過自動更新"
@@ -132,5 +150,5 @@ if ($admin) {
     [IO.File]::WriteAllText($script, $body, (New-Object Text.UTF8Encoding $true))
     Write-Host "需要系統管理員權限，請在跳出的視窗按「是」。"
     Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script)
-    if ($install) { Log "改裝版 $latest 安裝完成" }
+    CheckInstalled
 }
