@@ -1,4 +1,4 @@
-From 2b55470b24f347b9c5d9b11495b0320b983eee7a Mon Sep 17 00:00:00 2001
+From a27af0a57f6131d469ce1e1f7da1b38de1583dd3 Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
 Date: Wed, 21 Oct 2026 14:43:56 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
@@ -41,8 +41,8 @@ Content-Transfer-Encoding: 8bit
  platforms/windows/tsf/src/lib.rs          |   1 +
  platforms/windows/tsf/src/modapps.rs      |  31 +++++
  platforms/windows/tsf/src/service.rs      |   4 +-
- platforms/windows/tsf/src/session.rs      |  27 +++++
- 26 files changed, 630 insertions(+), 7 deletions(-)
+ platforms/windows/tsf/src/session.rs      |  21 ++++
+ 26 files changed, 624 insertions(+), 7 deletions(-)
  create mode 100644 core/session/mod_mixed.go
  create mode 100644 core/session/mod_mixed_test.go
  create mode 100644 core/session/mod_toggle.go
@@ -945,39 +945,27 @@ index 61e00da..cc3c748 100644
              if !st.composing {
                  st.session.handle(json!({"type": "display", "columns": 0}))
 diff --git a/platforms/windows/tsf/src/session.rs b/platforms/windows/tsf/src/session.rs
-index afdb2c9..9bc9ebc 100644
+index afdb2c9..0343525 100644
 --- a/platforms/windows/tsf/src/session.rs
 +++ b/platforms/windows/tsf/src/session.rs
-@@ -138,10 +138,15 @@ pub struct Session {
-     simplified: bool,
-     // 上一次從引擎得知「輸出簡體字」的時間（health／open／快照）；換欄位時剛問過就不再問（refresh_simplified_after）。
-     simplified_at: Option<Instant>,
-+<<<<<<< HEAD
-     // 沒在組字時哪些鍵交給引擎（health 的 info，見 idle_key_from，#183）與它是在哪一代連線上問到的。設定一改引擎就重啟、
+@@ -142,6 +142,8 @@ pub struct Session {
      // 舊連線跟著斷，所以同一代、連線還在時沿用，不每按一個鍵就問一次 health（同 caps_generation）。
      idle_info: Option<Value>,
      idle_generation: u32,
-+=======
 +    /// 0c-ime-mod：這個程式在「一律從英文開始的程式」清單裡（modapps.rs）。
 +    english_app: bool,
-+>>>>>>> 改裝：切換中英時結束組字、一律從英文開始的程式、大寫字母後接注音
  }
  
  /// 重開 session（引擎重啟、斷線）時要不要送「設定模式」還原外殼記得的模式（#160）。新 session 從開始時的模式起：
-@@ -206,8 +211,12 @@ impl Session {
-             simplified_live: false,
-             simplified: false,
+@@ -208,6 +210,7 @@ impl Session {
              simplified_at: None,
-+<<<<<<< HEAD
              idle_info: None,
              idle_generation: 0,
-+=======
 +            english_app: false,
-+>>>>>>> 改裝：切換中英時結束組字、一律從英文開始的程式、大寫字母後接注音
          }
      }
  
-@@ -290,9 +299,20 @@ impl Session {
+@@ -290,9 +293,20 @@ impl Session {
              self.english = english;
              self.caps_english = false; // 模式照引擎的（共用模式或開始時的）；Caps Lock 由下一個按鍵重新同步（#173）
          }
@@ -998,7 +986,7 @@ index afdb2c9..9bc9ebc 100644
      /// 目前的 session 是否可以送 #123 的新鍵名（Shift＋←／→、Shift＋Delete／Backspace）。
      /// 還沒開 session 或引擎不支援時為 false；沒在組字時這些鍵本來就交還應用程式，不需要查。
      pub fn vocab_keys(&self) -> bool {
-@@ -463,6 +483,13 @@ impl Session {
+@@ -463,6 +477,13 @@ impl Session {
          self.caps_lock_english = reply["info"]["caps_lock_english"] == "true";
          self.caps_generation = self.generation;
          self.learn_simplified(&reply["info"]);

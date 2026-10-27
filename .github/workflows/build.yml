@@ -86,6 +86,7 @@ jobs:
           git clone --quiet --depth 1 --branch "$TAG" "$UPSTREAM" src
           cd src
           git -c user.name=mod -c user.email=mod@localhost am --3way ../mod/patches/*.patch
+          if git grep -n -E '^(<<<<<<<|>>>>>>>) ' -- . ':!*.md'; then echo "::error::patch 裡留有衝突標記"; exit 1; fi
       # patch 套不上（官方改到同一段程式）：開一個 Issue，GitHub 會寄信通知；同一版只開一次。
       - name: 通知需要更新 patch
         if: failure() && steps.apply.conclusion == 'failure'
