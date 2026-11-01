@@ -1,6 +1,6 @@
-From 92a3d36bd7219bc139922eb640e9f33083e981fe Mon Sep 17 00:00:00 2001
+From 300ddcf4f58b6889d2dd9a3bc72a7ea70e491af8 Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
-Date: Wed, 21 Oct 2026 14:43:56 +0800
+Date: Sun, 1 Nov 2026 10:10:33 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
  =?UTF-8?q?=E4=B8=AD=E8=8B=B1=E6=99=82=E7=B5=90=E6=9D=9F=E7=B5=84=E5=AD=97?=
  =?UTF-8?q?=E3=80=81=E4=B8=80=E5=BE=8B=E5=BE=9E=E8=8B=B1=E6=96=87=E9=96=8B?=
@@ -22,7 +22,7 @@ Content-Transfer-Encoding: 8bit
  cmd/0c-update/main.go                     |   4 +
  core/engine/engine.go                     |   4 +
  core/session/mixed.go                     |   4 +
- core/session/mod_mixed.go                 |  40 ++++++
+ core/session/mod_mixed.go                 |  44 ++++++
  core/session/mod_mixed_test.go            |  39 ++++++
  core/session/mod_toggle.go                |  30 ++++
  core/session/mod_toggle_test.go           | 111 +++++++++++++++
@@ -42,9 +42,8 @@ Content-Transfer-Encoding: 8bit
  platforms/settings/ui/mod.js              |  85 ++++++++++++
  platforms/windows/tsf/src/lib.rs          |   1 +
  platforms/windows/tsf/src/modapps.rs      |  31 +++++
- platforms/windows/tsf/src/service.rs      |   4 +-
- platforms/windows/tsf/src/session.rs      |  21 +++
- 26 files changed, 703 insertions(+), 7 deletions(-)
+ platforms/windows/tsf/src/session.rs      |  16 +++
+ 25 files changed, 700 insertions(+), 5 deletions(-)
  create mode 100644 core/session/mod_mixed.go
  create mode 100644 core/session/mod_mixed_test.go
  create mode 100644 core/session/mod_toggle.go
@@ -57,10 +56,10 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 platforms/windows/tsf/src/modapps.rs
 
 diff --git a/cmd/0c-server/main.go b/cmd/0c-server/main.go
-index bcf47d7..bc0ce22 100644
+index fe64ee0..5d00f15 100644
 --- a/cmd/0c-server/main.go
 +++ b/cmd/0c-server/main.go
-@@ -151,6 +151,8 @@ func serve() string {
+@@ -153,6 +153,8 @@ func serve() string {
  	eng.MixedInput = config.MixedInput
  	eng.Toneless = config.Toneless // #150：開啟時 session 停用混打的自動判斷；health 的 mixed_input 照設定檔回報
  	eng.EnglishAutocomplete = config.EnglishAutocomplete
@@ -69,7 +68,7 @@ index bcf47d7..bc0ce22 100644
  	eng.CandidateBeforeCursor = config.CandidateCursor == "before"
  	eng.EmojiShortcut = config.EmojiShortcut
  	eng.EmojiEqualsFirst = config.EmojiEqualsFirst
-@@ -468,6 +470,9 @@ func serve() string {
+@@ -477,6 +479,9 @@ func serve() string {
  	if punctuationSource != "" {
  		srv.Info["punctuation_source"] = punctuationSource
  	}
@@ -80,10 +79,10 @@ index bcf47d7..bc0ce22 100644
  	srv.Info["english_pack"] = eng.EnglishPack
  	if eng.EnglishPack == "" {
 diff --git a/cmd/0c-update/main.go b/cmd/0c-update/main.go
-index 4d38754..4937123 100644
+index 28bd80d..fb201c6 100644
 --- a/cmd/0c-update/main.go
 +++ b/cmd/0c-update/main.go
-@@ -103,6 +103,10 @@ func listSettings(w io.Writer, r settings.Report, path string) {
+@@ -105,6 +105,10 @@ func listSettings(w io.Writer, r settings.Report, path string) {
  	for _, p := range fuzzy.Pairs() {
  		fmt.Fprintf(w, "fuzzy-%s=%s（%s 模糊音：off 關閉；select 開候選時合併近音；auto 另在語境明顯支持近音時自動改字，實驗）\n", p.ID(), fuzzyConfig.Mode(p), p.Symbols())
  	}
@@ -95,7 +94,7 @@ index 4d38754..4937123 100644
  
  func isJSONFlag(arg string) bool { return arg == "-json" || arg == "--json" }
 diff --git a/core/engine/engine.go b/core/engine/engine.go
-index eccbe30..ed3c95b 100644
+index c8e5c25..c5f3d32 100644
 --- a/core/engine/engine.go
 +++ b/core/engine/engine.go
 @@ -43,6 +43,8 @@ type Engine struct {
@@ -117,10 +116,10 @@ index eccbe30..ed3c95b 100644
  	e.sessions[e.next].EmojiShortcut = e.EmojiShortcut
  	e.sessions[e.next].EmojiEqualsFirst = e.EmojiEqualsFirst
 diff --git a/core/session/mixed.go b/core/session/mixed.go
-index 22ba6f9..8c9ac6e 100644
+index 1173bd4..7221d03 100644
 --- a/core/session/mixed.go
 +++ b/core/session/mixed.go
-@@ -525,6 +525,10 @@ func (s *Session) mixedBoundary(raw, key string, tone rune) (int, zhuyin.Syllabl
+@@ -635,6 +635,10 @@ func (s *Session) mixedBoundary(raw, key string, tone rune) (int, zhuyin.Syllabl
  	if best > 0 {
  		return best, bestSyl, true
  	}
@@ -133,10 +132,10 @@ index 22ba6f9..8c9ac6e 100644
  	// 單一字母（gpt4o、ps4u、win7u）不是 ㄟ、ㄧ 一聲。
 diff --git a/core/session/mod_mixed.go b/core/session/mod_mixed.go
 new file mode 100644
-index 0000000..6190016
+index 0000000..3f1dbe0
 --- /dev/null
 +++ b/core/session/mod_mixed.go
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,44 @@
 +package session
 +
 +// 0c-ime-mod：中英混打時，單一個大寫字母後面接注音。
@@ -144,7 +143,7 @@ index 0000000..6190016
 +// 原本的英→中切點（mixedBoundary，#119）要求英文前段是字典認得的字、數字或標點，或至少兩個字母，
 +// 所以「輸入P的話」打成 P2k7cj84 會整串留成英文。大寫字母只能按著 Shift 打出來，不會是注音鍵，
 +// 後面的按鍵照注音順序（聲母、介音、韻母）組成常用字時，就在大寫字母後面切開：P2k7 → P的、Psu3 → P你。
-+// 接空白的一聲（P5␣ → P之）也切，但整串是英文字（Pig、Ted）時照字面。
++// 接空白的一聲（Pz/␣ → P風）也切，但整串是英文字（Pig、Ted）或只接數字鍵的型號（F104）時照字面。
 +
 +import (
 +	"strings"
@@ -160,6 +159,10 @@ index 0000000..6190016
 +	}
 +	rest := raw[1:]
 +	if strings.ContainsFunc(rest, func(r rune) bool { return r >= 'A' && r <= 'Z' || r > 0x7f }) {
++		return "", false
++	}
++	// 後段只有數字鍵（F104、T184、A320）是型號，照字面；官方 0.2.8 起有這條測試。
++	if !strings.ContainsFunc(rest, func(r rune) bool { return r >= 'a' && r <= 'z' }) {
 +		return "", false
 +	}
 +	if !s.keysInSyllableOrder(rest) {
@@ -179,7 +182,7 @@ index 0000000..6190016
 +}
 diff --git a/core/session/mod_mixed_test.go b/core/session/mod_mixed_test.go
 new file mode 100644
-index 0000000..c264424
+index 0000000..8c03004
 --- /dev/null
 +++ b/core/session/mod_mixed_test.go
 @@ -0,0 +1,39 @@
@@ -211,7 +214,7 @@ index 0000000..c264424
 +}
 +
 +func TestModUpperLetterKeepsEnglish(t *testing.T) {
-+	for _, word := range []string{"Pig", "Go", "Hi", "Ted", "Yes", "Ok"} {
++	for _, word := range []string{"Pig", "Go", "Hi", "Ted", "Yes", "Ok", "F104", "T184", "A320"} {
 +		s := mixedSession()
 +		typeSyl(s, "ㄨㄛˇ")
 +		for _, r := range word {
@@ -376,10 +379,10 @@ index 0000000..ef7839c
 +	}
 +}
 diff --git a/core/session/session.go b/core/session/session.go
-index b75666a..b8d85bf 100644
+index adb71c9..795bbd4 100644
 --- a/core/session/session.go
 +++ b/core/session/session.go
-@@ -109,6 +109,8 @@ type Session struct {
+@@ -112,6 +112,8 @@ type Session struct {
  	Toneless bool
  	// MixedInput is opt-in; English is a shared, immutable vocabulary.
  	EnglishAutocomplete   bool
@@ -388,7 +391,7 @@ index b75666a..b8d85bf 100644
  	MixedInput            bool
  	English               *english.Dictionary
  	EmojiShortcut         string
-@@ -365,6 +367,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
+@@ -369,6 +371,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
  		}
  		// 使用者自己切換或外殼設定模式之後，關掉 Caps Lock 不再改變模式（#173）。
  		s.capsEnglish = false
@@ -400,7 +403,7 @@ index b75666a..b8d85bf 100644
  		s.setMode(english, r.Type == proto.Toggle && r.Restore, stash)
  	case proto.CapsLock:
  		handled, commit = s.capsLockChanged(r.On)
-@@ -764,6 +771,9 @@ func (s *Session) key(k string) (handled bool, commit string) {
+@@ -768,6 +775,9 @@ func (s *Session) key(k string) (handled bool, commit string) {
  			return true, ""
  		}
  	}
@@ -412,7 +415,7 @@ index b75666a..b8d85bf 100644
  		s.insertPendingLiteral()
 diff --git a/internal/settings/mod.go b/internal/settings/mod.go
 new file mode 100644
-index 0000000..fb05b5d
+index 0000000..4596e6b
 --- /dev/null
 +++ b/internal/settings/mod.go
 @@ -0,0 +1,159 @@
@@ -488,7 +491,7 @@ index 0000000..fb05b5d
 +	return v
 +}
 +
-+// EnglishApps：一律從英文開始、不做英文自動補字的程式（執行檔名稱，不分大小寫）。
++// EnglishApps：一律從英文開始的程式（執行檔名稱，不分大小寫）。
 +func (s Settings) EnglishApps() []string {
 +	raw, ok := s.modExtra()[modEnglishAppsKey]
 +	if !ok {
@@ -638,7 +641,7 @@ index 0000000..69c2638
 +	}
 +}
 diff --git a/internal/settings/settings.go b/internal/settings/settings.go
-index e200a30..0bede00 100644
+index 848237b..1f28b1d 100644
 --- a/internal/settings/settings.go
 +++ b/internal/settings/settings.go
 @@ -519,6 +519,9 @@ func (s Settings) notes() []string {
@@ -651,7 +654,7 @@ index e200a30..0bede00 100644
  	for _, key := range []string{"selection", "punctuation", "document_context", "mixed_input", "english_autocomplete", "left_shift", "esc_clear", "space_selects", "candidate_cursor", "advance_after_select", "candidate_layout", "emoji_shortcut", "emoji_equals_first", "keyboard_layout", "selection_keys", "toggle_key", "mode_memory", "start_mode", "output_simplified", "simplified_hotkey", "ctrl_punctuation", "caps_lock_english", "toneless"} {
  		if raw, ok := kept[key]; ok {
  			out = append(out, fmt.Sprintf("%s：本版不認得 %s，暫用預設值，存檔時保留原值", strings.ReplaceAll(key, "_", "-"), raw))
-@@ -852,6 +855,7 @@ func specs() []spec {
+@@ -853,6 +856,7 @@ func specs() []spec {
  		r := r
  		out = append(out, spec{r.key, r.label, r.description, r.get(inputstyleDefaultRules()), r.values, func(s Settings) string { return r.get(s.ProfileRules()) }})
  	}
@@ -659,7 +662,7 @@ index e200a30..0bede00 100644
  	return out
  }
  
-@@ -1051,6 +1055,9 @@ func (s *Settings) set(key, value string) error {
+@@ -1065,6 +1069,9 @@ func (s *Settings) set(key, value string) error {
  	if s.profileLocked(key) {
  		return &SetError{Code: "locked_by_profile", Key: key, Msg: "此項由選用的輸入習慣固定；請先複製成自訂"}
  	}
@@ -822,10 +825,10 @@ index c6f6183..415a70d 100644
          }
      }
 diff --git a/platforms/settings/ui/app.js b/platforms/settings/ui/app.js
-index be963b2..7add1ec 100644
+index 6c77026..bed50ef 100644
 --- a/platforms/settings/ui/app.js
 +++ b/platforms/settings/ui/app.js
-@@ -483,7 +483,8 @@
+@@ -493,7 +493,8 @@
      const emoji = items.find((item) => item.key === 'emoji-shortcut');
      const equalsFirst = items.find((item) => item.key === 'emoji-equals-first');
      const order = (item) => (spec.keys.includes(item.key) ? spec.keys.indexOf(item.key) : spec.keys.length);
@@ -835,7 +838,7 @@ index be963b2..7add1ec 100644
        .map((item, i) => [order(item), i, item]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , item]) => item);
      const rows = mine.map((item) => {
        const parent = itemRow(item, locked ||
-@@ -494,6 +495,7 @@
+@@ -504,6 +505,7 @@
        return h('div', { class: 'setting-group', role: 'group', 'aria-labelledby': 'label-' + item.key }, parent, child);
      });
      if (rows.length) root.append(h('div', { class: 'card' }, ...rows));
@@ -844,7 +847,7 @@ index be963b2..7add1ec 100644
      if (fuzzy.length) {
        const enabled = fuzzy.some((item) => item.value !== 'off');
 diff --git a/platforms/settings/ui/index.html b/platforms/settings/ui/index.html
-index 5546391..44385d7 100644
+index 1628b7b..9311012 100644
 --- a/platforms/settings/ui/index.html
 +++ b/platforms/settings/ui/index.html
 @@ -5,6 +5,7 @@
@@ -855,7 +858,7 @@ index 5546391..44385d7 100644
  </head>
  <body>
  <div class="app">
-@@ -41,6 +42,7 @@
+@@ -42,6 +43,7 @@
  <script src="vocab.js"></script>
  <script src="models.js"></script>
  <script src="input-styles.js"></script>
@@ -989,12 +992,12 @@ index 77b352f..b819fb3 100644
  mod uielement;
 diff --git a/platforms/windows/tsf/src/modapps.rs b/platforms/windows/tsf/src/modapps.rs
 new file mode 100644
-index 0000000..eee7b8d
+index 0000000..e90c770
 --- /dev/null
 +++ b/platforms/windows/tsf/src/modapps.rs
 @@ -0,0 +1,31 @@
 +//! 0c-ime-mod：「一律從英文開始的程式」。引擎在 health／open 的 info 回報 english_apps（執行檔名稱以 | 分隔），
-+//! 這個程式在清單裡時：還不知道中英模式（剛開的程式）就從英文開始，英文模式也不做自動補字（字母直接交給程式）。
++//! 這個程式在清單裡時：還不知道中英模式（剛開的程式）就從英文開始。英文模式沒有插入點時按鍵直接交給程式，由官方 #210 處理。
 +use serde_json::Value;
 +
 +/// `exe` 是否在 info 的 english_apps 清單裡（不分大小寫）。
@@ -1024,26 +1027,11 @@ index 0000000..eee7b8d
 +        assert!(!listed_in(&json!({}), "AfterFX.exe"));
 +    }
 +}
-diff --git a/platforms/windows/tsf/src/service.rs b/platforms/windows/tsf/src/service.rs
-index 61e00da..cc3c748 100644
---- a/platforms/windows/tsf/src/service.rs
-+++ b/platforms/windows/tsf/src/service.rs
-@@ -1017,8 +1017,8 @@ impl TextService_Impl {
-         }
-         let snap = {
-             let mut st = self.state.borrow_mut();
--            if !st.session.english() || !st.session.available() {
--                return None;
-+            if !st.session.english() || !st.session.available() || st.session.english_app() {
-+                return None; // 0c-ime-mod：清單裡的程式不做英文自動補字
-             }
-             if !st.composing {
-                 st.session.handle(json!({"type": "display", "columns": 0}))
 diff --git a/platforms/windows/tsf/src/session.rs b/platforms/windows/tsf/src/session.rs
-index afdb2c9..0343525 100644
+index 35d4b6c..c721289 100644
 --- a/platforms/windows/tsf/src/session.rs
 +++ b/platforms/windows/tsf/src/session.rs
-@@ -142,6 +142,8 @@ pub struct Session {
+@@ -144,6 +144,8 @@ pub struct Session {
      // 舊連線跟著斷，所以同一代、連線還在時沿用，不每按一個鍵就問一次 health（同 caps_generation）。
      idle_info: Option<Value>,
      idle_generation: u32,
@@ -1052,7 +1040,7 @@ index afdb2c9..0343525 100644
  }
  
  /// 重開 session（引擎重啟、斷線）時要不要送「設定模式」還原外殼記得的模式（#160）。新 session 從開始時的模式起：
-@@ -208,6 +210,7 @@ impl Session {
+@@ -210,6 +212,7 @@ impl Session {
              simplified_at: None,
              idle_info: None,
              idle_generation: 0,
@@ -1060,7 +1048,7 @@ index afdb2c9..0343525 100644
          }
      }
  
-@@ -290,9 +293,20 @@ impl Session {
+@@ -292,6 +295,12 @@ impl Session {
              self.english = english;
              self.caps_english = false; // 模式照引擎的（共用模式或開始時的）；Caps Lock 由下一個按鍵重新同步（#173）
          }
@@ -1073,15 +1061,7 @@ index afdb2c9..0343525 100644
          before != self.english || simplified
      }
  
-+    /// 0c-ime-mod：這個程式在「一律從英文開始的程式」清單裡。
-+    pub fn english_app(&self) -> bool {
-+        self.english_app
-+    }
-+
-     /// 目前的 session 是否可以送 #123 的新鍵名（Shift＋←／→、Shift＋Delete／Backspace）。
-     /// 還沒開 session 或引擎不支援時為 false；沒在組字時這些鍵本來就交還應用程式，不需要查。
-     pub fn vocab_keys(&self) -> bool {
-@@ -463,6 +477,13 @@ impl Session {
+@@ -467,6 +476,13 @@ impl Session {
          self.caps_lock_english = reply["info"]["caps_lock_english"] == "true";
          self.caps_generation = self.generation;
          self.learn_simplified(&reply["info"]);
