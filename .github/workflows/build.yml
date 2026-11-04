@@ -14,9 +14,9 @@ on:
     branches: [main]
     paths: ["patches/**", "MOD_VERSION", "docs/**", "install-mod.ps1", ".github/workflows/build.yml"]
 
+# 預設唯讀；需要寫入的工作各自開權限。第三方 Action 鎖定 commit，不跟著標籤變動。
 permissions:
-  contents: write
-  issues: write
+  contents: read
 
 concurrency:
   group: build
@@ -27,13 +27,15 @@ env:
 
 jobs:
   plan:
+    permissions:
+      contents: write # 刪除重編的 Release、保持排程啟用的空提交
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
       version: ${{ steps.plan.outputs.version }}
       skip: ${{ steps.plan.outputs.skip }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: 檢查安裝腳本語法
@@ -73,11 +75,14 @@ jobs:
   prepare:
     needs: plan
     if: needs.plan.outputs.skip != 'true'
+    permissions:
+      contents: read
+      issues: write # patch 套不上時開 Issue
     runs-on: ubuntu-24.04
     env:
       TAG: ${{ needs.plan.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: mod
       - name: 取得官方原始碼並套用改裝
@@ -100,11 +105,11 @@ jobs:
               "$TAG" "$files" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > issue.md
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue.md
           fi
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: src/go.mod
           cache-dependency-path: src/go.sum
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: 測試改動到的部分
@@ -116,7 +121,7 @@ jobs:
       - name: 準備神經選字（Python 與模型）
         working-directory: src
         run: python3 scripts/prepare_neural.py --platform windows-amd64 --dictionary assets/data --out ../neural
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: assets
           path: |
@@ -126,6 +131,8 @@ jobs:
 
   build:
     needs: [plan, prepare]
+    permissions:
+      contents: write # 發布 Release
     runs-on: windows-2025
     env:
       TAG: ${{ needs.plan.outputs.tag }}
@@ -135,7 +142,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: mod
       - name: 取得官方原始碼並套用改裝
@@ -144,7 +151,7 @@ jobs:
           git clone --quiet --depth 1 --branch "$TAG" "$UPSTREAM" src
           cd src
           git -c user.name=mod -c user.email=mod@localhost am --3way ../mod/patches/*.patch
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: assets
           path: artifact
@@ -153,11 +160,11 @@ jobs:
           mkdir -p src/assets
           mv artifact/src/assets/data src/assets/data
           mv artifact/neural neural
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: src/go.mod
           cache-dependency-path: src/go.sum
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Rust 工具鏈
@@ -205,5 +212,9 @@ jobs:
 
           安裝：在 PowerShell 執行 \`install-mod.ps1\`（見儲存庫首頁說明）。
           EOF
-          gh release create "v$VERSION" out/*.zip out/*.sha256 --repo "$GITHUB_REPOSITORY" \
+          # 安裝腳本也放進 Release：電腦上的排程只用這份（核對雜湊），不直接抓 main 分支。
+          # 加上 UTF-8 BOM：Windows PowerShell 5.1 執行沒有 BOM 的檔案會把中文當成 Big5 讀錯。
+          { printf '\xef\xbb\xbf'; cat mod/install-mod.ps1; } > out/install-mod.ps1
+          (cd out && sha256sum install-mod.ps1 > install-mod.ps1.sha256)
+          gh release create "v$VERSION" out/*.zip out/*.sha256 out/install-mod.ps1 --repo "$GITHUB_REPOSITORY" \
             --title "改裝版 $VERSION" --notes-file notes.md
