@@ -1,4 +1,4 @@
-From ed40d533685c7b6f18d70a93f9e3b404e14fcfba Mon Sep 17 00:00:00 2001
+From e893fa49620b302c54d491c7e1fc01e6b9c586d2 Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
 Date: Sat, 7 Nov 2026 11:49:59 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
@@ -12,6 +12,7 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ cmd/0c-server/cjk_latin_space_test.go     |   2 +-
  cmd/0c-server/main.go                     |   5 +
  cmd/0c-update/main.go                     |   4 +
  core/engine/engine.go                     |   4 +
@@ -37,7 +38,7 @@ Content-Transfer-Encoding: 8bit
  platforms/windows/tsf/src/lib.rs          |   1 +
  platforms/windows/tsf/src/modapps.rs      |  31 +++++
  platforms/windows/tsf/src/session.rs      |  16 +++
- 25 files changed, 700 insertions(+), 5 deletions(-)
+ 26 files changed, 701 insertions(+), 6 deletions(-)
  create mode 100644 core/session/mod_mixed.go
  create mode 100644 core/session/mod_mixed_test.go
  create mode 100644 core/session/mod_toggle.go
@@ -49,6 +50,19 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 platforms/settings/ui/mod.js
  create mode 100644 platforms/windows/tsf/src/modapps.rs
 
+diff --git a/cmd/0c-server/cjk_latin_space_test.go b/cmd/0c-server/cjk_latin_space_test.go
+index 4e9295a..6263d2c 100644
+--- a/cmd/0c-server/cjk_latin_space_test.go
++++ b/cmd/0c-server/cjk_latin_space_test.go
+@@ -24,7 +24,7 @@ func TestCJKLatinSpaceSettingInServer(t *testing.T) {
+ 	for _, tc := range []struct {
+ 		file map[string]any
+ 		on   bool
+-	}{{map[string]any{"selection": "statistical"}, false}, {map[string]any{"selection": "statistical", "cjk_latin_space": true}, true}} {
++	}{{map[string]any{"selection": "statistical", "end_composition_on_toggle": false}, false}, {map[string]any{"selection": "statistical", "cjk_latin_space": true, "end_composition_on_toggle": false}, true}} { // 0c-ime-mod：這裡測官方「切換後組字區還開著」，關掉改裝的切換結束組字
+ 		b, _ := json.Marshal(tc.file)
+ 		if err := os.WriteFile(filepath.Join(dir, settings.FileName), b, 0600); err != nil {
+ 			t.Fatal(err)
 diff --git a/cmd/0c-server/main.go b/cmd/0c-server/main.go
 index 38778bc..53fd13c 100644
 --- a/cmd/0c-server/main.go
