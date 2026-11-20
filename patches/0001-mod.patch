@@ -1,4 +1,4 @@
-From fe9e1043fd52f33ead0bc3152c929c56b8b7ed0c Mon Sep 17 00:00:00 2001
+From ab2efd848748caa2631a63f8bb1ddb6a7779e2ce Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
 Date: Sat, 7 Nov 2026 11:49:59 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
@@ -18,7 +18,7 @@ Content-Transfer-Encoding: 8bit
  core/session/mixed.go                     |   4 +
  core/session/mod_mixed.go                 |  51 ++++++++
  core/session/mod_mixed_test.go            |  39 ++++++
- core/session/mod_toggle.go                |  19 +++
+ core/session/mod_toggle.go                |  22 ++++
  core/session/mod_toggle_test.go           |  84 +++++++++++++
  core/session/session.go                   |   6 +
  internal/settings/mod.go                  | 137 ++++++++++++++++++++++
@@ -37,7 +37,7 @@ Content-Transfer-Encoding: 8bit
  platforms/windows/tsf/src/lib.rs          |   1 +
  platforms/windows/tsf/src/modapps.rs      |  31 +++++
  platforms/windows/tsf/src/session.rs      |  16 +++
- 26 files changed, 637 insertions(+), 6 deletions(-)
+ 26 files changed, 640 insertions(+), 6 deletions(-)
  create mode 100644 core/session/mod_mixed.go
  create mode 100644 core/session/mod_mixed_test.go
  create mode 100644 core/session/mod_toggle.go
@@ -63,7 +63,7 @@ index 4e9295a..6263d2c 100644
  		if err := os.WriteFile(filepath.Join(dir, settings.FileName), b, 0600); err != nil {
  			t.Fatal(err)
 diff --git a/cmd/0c-server/main.go b/cmd/0c-server/main.go
-index e460497..e9c4c2b 100644
+index 532a275..db495bf 100644
 --- a/cmd/0c-server/main.go
 +++ b/cmd/0c-server/main.go
 @@ -153,6 +153,7 @@ func serve() string {
@@ -74,7 +74,7 @@ index e460497..e9c4c2b 100644
  	eng.CandidateBeforeCursor = config.CandidateCursor == "before"
  	eng.EmojiShortcut = config.EmojiShortcut
  	eng.EmojiEqualsFirst = config.EmojiEqualsFirst
-@@ -495,6 +496,9 @@ func serve() string {
+@@ -505,6 +506,9 @@ func serve() string {
  	if punctuationSource != "" {
  		srv.Info["punctuation_source"] = punctuationSource
  	}
@@ -85,10 +85,10 @@ index e460497..e9c4c2b 100644
  	srv.Info["english_pack"] = eng.EnglishPack
  	if eng.EnglishPack == "" {
 diff --git a/cmd/0c-update/main.go b/cmd/0c-update/main.go
-index 9e8c974..517402b 100644
+index 9628877..e14c684 100644
 --- a/cmd/0c-update/main.go
 +++ b/cmd/0c-update/main.go
-@@ -109,6 +109,9 @@ func listSettings(w io.Writer, r settings.Report, path string) {
+@@ -111,6 +111,9 @@ func listSettings(w io.Writer, r settings.Report, path string) {
  	for _, p := range fuzzy.Pairs() {
  		fmt.Fprintf(w, "fuzzy-%s=%s（%s 模糊音：off 關閉；select 開候選時合併近音；auto 另在語境明顯支持近音時自動改字，實驗）\n", p.ID(), fuzzyConfig.Mode(p), p.Symbols())
  	}
@@ -99,20 +99,20 @@ index 9e8c974..517402b 100644
  
  func isJSONFlag(arg string) bool { return arg == "-json" || arg == "--json" }
 diff --git a/core/engine/engine.go b/core/engine/engine.go
-index d806763..306148d 100644
+index 582065b..cb255d5 100644
 --- a/core/engine/engine.go
 +++ b/core/engine/engine.go
-@@ -47,6 +47,7 @@ type Engine struct {
- 	Toneless              bool              // 「不打聲調也能選字」開著時由宿主設定（#150）；開啟時停用中英混打的自動判斷。
- 	ZhuyinErrorHint       bool              // 「打錯注音時提示」開著時由宿主設定（#300，預設開）；零值時沒有字的音節照舊原樣留下。
+@@ -50,6 +50,7 @@ type Engine struct {
+ 	Abbreviation          bool              // 聲調選填時只打聲母或介音也能選字；只在 Toneless 時作用。
+ 	MixedWithToneless     bool              // 聲調選填與混打共存（手機）：注音鍵走聲調選填，實體按鍵走混打。
  	EnglishAutocomplete   bool
 +	EndOnToggle           bool                // 0c-ime-mod：切換中英時結束組字
  	MixedInput            bool                // opt-in bilingual keys; disabled preserves legacy behavior.
  	English               *english.Dictionary // nil uses the authored prototype vocabulary.
  	EnglishPack           string              // host-supplied pack version for diagnostics; empty means prototype.
-@@ -155,6 +156,7 @@ func (e *Engine) OpenSession() uint64 {
- 	e.sessions[e.next].Toneless = e.Toneless
- 	e.sessions[e.next].ZhuyinErrorHint = e.ZhuyinErrorHint
+@@ -169,6 +170,7 @@ func (e *Engine) OpenSession() uint64 {
+ 	e.sessions[e.next].Abbreviation = e.Abbreviation
+ 	e.sessions[e.next].MixedWithToneless = e.MixedWithToneless
  	e.sessions[e.next].EnglishAutocomplete = e.EnglishAutocomplete
 +	e.sessions[e.next].EndOnToggle = e.EndOnToggle // 0c-ime-mod
  	e.sessions[e.next].MixedInput = e.MixedInput
@@ -237,21 +237,24 @@ index 0000000..2c226d3
 +}
 diff --git a/core/session/mod_toggle.go b/core/session/mod_toggle.go
 new file mode 100644
-index 0000000..229893c
+index 0000000..e76d650
 --- /dev/null
 +++ b/core/session/mod_toggle.go
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,22 @@
 +package session
 +
 +// 0c-ime-mod：切換中英時結束組字。
 +//
 +// 原本的做法（#90）只清掉沒打完的注音，組字區照樣開著；切到英文後打的字母會接進組字區，
 +// 在 After Effects 這類沒有文字框的畫面上就是快捷鍵全被懸浮的組字視窗吃掉。
-+// 開啟 EndOnToggle 時，單按 Shift 切換先清掉沒打完的注音、關掉候選，再把已組好的字送出，
++// 開啟 EndOnToggle 時，單按 Shift 切換照官方結束組字的方式（commitComposed，#322）：
++// 已是完整音節的注音留下、沒打完的注音丟掉、關掉候選，再把已組好的字送出，
 +// 組字區關閉，之後的按鍵照模式直接交給程式。
 +
 +// modEndOnToggle 回傳要送出的文字；沒有組字時什麼都不做。
 +func (s *Session) modEndOnToggle() string {
++	s.finishUntoned() // 同官方 setMode／commitComposed：聲調選填的完整音節不當成打到一半（#150）
++	s.nineKeys = nil  // 同官方 setMode：九宮格組不成音節的鍵一起清掉
 +	s.clearPendingZhuyin()
 +	s.cand = nil
 +	s.toggleStash = nil
@@ -351,18 +354,18 @@ index 0000000..49d42f0
 +	}
 +}
 diff --git a/core/session/session.go b/core/session/session.go
-index 9aebb90..d96d5b5 100644
+index 6d9b358..9256a0f 100644
 --- a/core/session/session.go
 +++ b/core/session/session.go
-@@ -116,6 +116,7 @@ type Session struct {
- 	Toneless bool
+@@ -127,6 +127,7 @@ type Session struct {
+ 	sylPrior          map[zhuyin.Syllable]float64 // 簡拼保留讀音用的單音節常用程度（syllablePrior）
  	// MixedInput is opt-in; English is a shared, immutable vocabulary.
  	EnglishAutocomplete   bool
 +	EndOnToggle           bool // 0c-ime-mod：切換中英時結束組字（mod_toggle.go）
  	MixedInput            bool
  	English               *english.Dictionary
  	EmojiShortcut         string
-@@ -412,6 +413,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
+@@ -494,6 +495,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
  		}
  		// 使用者自己切換或外殼設定模式之後，關掉 Caps Lock 不再改變模式（#173）。
  		s.capsEnglish = false
@@ -580,19 +583,19 @@ index 0000000..69c2638
 +	}
 +}
 diff --git a/internal/settings/settings.go b/internal/settings/settings.go
-index af9f80a..60a9cdb 100644
+index f220efe..8f424c3 100644
 --- a/internal/settings/settings.go
 +++ b/internal/settings/settings.go
-@@ -536,6 +536,8 @@ func (s Settings) notes() []string {
+@@ -566,6 +566,8 @@ func (s Settings) notes() []string {
  	if s.extra != "" {
  		_ = json.Unmarshal([]byte(s.extra), &kept)
  	}
 +	delete(kept, modEndOnToggleKey) // 0c-ime-mod：改裝的設定存在保留欄位，不是「不認得」
 +	delete(kept, modEnglishAppsKey)
- 	for _, key := range []string{"selection", "punctuation", "document_context", "mixed_input", "english_autocomplete", "left_shift", "esc_clear", "space_selects", "candidate_cursor", "advance_after_select", "candidate_layout", "emoji_shortcut", "emoji_equals_first", "keyboard_layout", "selection_keys", "toggle_key", "mode_memory", "start_mode", "output_simplified", "simplified_hotkey", "ctrl_punctuation", "shift_symbol_halfwidth", "all_symbols_halfwidth", "cjk_latin_space", "zhuyin_error_hint", "caps_lock_english", "toneless"} {
+ 	for _, key := range []string{"selection", "punctuation", "document_context", "mixed_input", "english_autocomplete", "left_shift", "esc_clear", "space_selects", "candidate_cursor", "advance_after_select", "candidate_layout", "emoji_shortcut", "emoji_equals_first", "keyboard_layout", "selection_keys", "toggle_key", "shift_tap_ms", "mode_memory", "start_mode", "output_simplified", "simplified_hotkey", "ctrl_punctuation", "shift_symbol_halfwidth", "all_symbols_halfwidth", "cjk_latin_space", "zhuyin_error_hint", "personal_learning", "caps_lock_english", "toneless"} {
  		if raw, ok := kept[key]; ok {
  			out = append(out, fmt.Sprintf("%s：本版不認得 %s，暫用預設值，存檔時保留原值", strings.ReplaceAll(key, "_", "-"), raw))
-@@ -940,6 +942,7 @@ func specs() []spec {
+@@ -993,6 +995,7 @@ func specs() []spec {
  		r := r
  		out = append(out, spec{r.key, r.label, r.description, r.get(inputstyleDefaultRules()), r.values, func(s Settings) string { return r.get(s.ProfileRules()) }})
  	}
@@ -600,7 +603,7 @@ index af9f80a..60a9cdb 100644
  	return out
  }
  
-@@ -1188,6 +1191,9 @@ func (s *Settings) set(key, value string) error {
+@@ -1253,6 +1256,9 @@ func (s *Settings) set(key, value string) error {
  	if s.profileLocked(key) {
  		return &SetError{Code: "locked_by_profile", Key: key, Msg: "此項由選用的輸入習慣固定；請先複製成自訂"}
  	}
@@ -611,15 +614,15 @@ index af9f80a..60a9cdb 100644
  	if !ok {
  		names := make([]string, 0, len(specs()))
 diff --git a/internal/settings/settings_test.go b/internal/settings/settings_test.go
-index 81e32dd..6199966 100644
+index 60e0ee2..6935fe2 100644
 --- a/internal/settings/settings_test.go
 +++ b/internal/settings/settings_test.go
 @@ -410,7 +410,7 @@ func TestCorruptFileIsReportedAndCanBeQuarantined(t *testing.T) {
  func TestItemsListEveryKeyWithCurrentValue(t *testing.T) {
  	s := Default()
  	items := s.Items()
--	want := 24 + len(fuzzy.Pairs()) + len(ruleSpecs()) // 含 simplified-hotkey（#192）、toneless（#150）、shift-symbol-halfwidth（#258）、cjk-latin-space（#273）、zhuyin-error-hint（#300）
-+	want := 24 + len(fuzzy.Pairs()) + len(ruleSpecs()) + len(modSpecs()) // 含 simplified-hotkey（#192）、toneless（#150）、shift-symbol-halfwidth（#258）、cjk-latin-space（#273）、zhuyin-error-hint（#300）；0c-ime-mod
+-	want := 26 + len(fuzzy.Pairs()) + len(ruleSpecs()) // 含 simplified-hotkey（#192）、toneless（#150）、shift-symbol-halfwidth（#258）、cjk-latin-space（#273）、zhuyin-error-hint（#300）、shift-tap-ms（#319）、personal-learning（#297）
++	want := 26 + len(fuzzy.Pairs()) + len(ruleSpecs()) + len(modSpecs()) // 含 simplified-hotkey（#192）、toneless（#150）、shift-symbol-halfwidth（#258）、cjk-latin-space（#273）、zhuyin-error-hint（#300）、shift-tap-ms（#319）、personal-learning（#297）；0c-ime-mod
  	if CapsLockEnglishSetting(runtime.GOOS) {
  		want++ // caps-lock-english（#173）只有 Windows、Linux
  	}
@@ -763,10 +766,10 @@ index b3b1e9d..ca6be9a 100644
          }
      }
 diff --git a/platforms/settings/ui/app.js b/platforms/settings/ui/app.js
-index bdeb8cf..08398ca 100644
+index 678c628..acc94a6 100644
 --- a/platforms/settings/ui/app.js
 +++ b/platforms/settings/ui/app.js
-@@ -547,7 +547,8 @@
+@@ -542,7 +542,8 @@
      const emoji = items.find((item) => item.key === 'emoji-shortcut');
      const equalsFirst = items.find((item) => item.key === 'emoji-equals-first');
      const order = (item) => (spec.keys.includes(item.key) ? spec.keys.indexOf(item.key) : spec.keys.length);
@@ -776,7 +779,7 @@ index bdeb8cf..08398ca 100644
        .map((item, i) => [order(item), i, item]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , item]) => item);
      const rows = mine.map((item) => {
        const parent = itemRow(item, locked ||
-@@ -558,6 +559,7 @@
+@@ -553,6 +554,7 @@
        return h('div', { class: 'setting-group', role: 'group', 'aria-labelledby': 'label-' + item.key }, parent, child);
      });
      if (rows.length) root.append(h('div', { class: 'card' }, ...rows));
@@ -915,10 +918,10 @@ index 0000000..be45385
 +  window.ZcMod = { keys: KEYS, render };
 +})();
 diff --git a/platforms/windows/tsf/src/lib.rs b/platforms/windows/tsf/src/lib.rs
-index 75ad26e..8c940fe 100644
+index bf9d458..4a1b020 100644
 --- a/platforms/windows/tsf/src/lib.rs
 +++ b/platforms/windows/tsf/src/lib.rs
-@@ -31,6 +31,7 @@ mod msctf;
+@@ -32,6 +32,7 @@ mod msctf;
  mod privacy;
  mod register;
  mod service;
