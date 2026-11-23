@@ -24,6 +24,7 @@ $Receipt = Join-Path $Zuin "install-receipt.json"
 $Updater = Join-Path $Zuin "bin\0c-update.exe"
 $ScriptUrl = "https://api.github.com/repos/$Repo/contents/install-mod.ps1"
 $Headers = @{ "User-Agent" = "0c-ime-mod" }
+$DailyAt = "22:47"   # GitHub 每 4 小時檢查官方新版，但排程常延遲到傍晚；晚上檢查，當天出的版本當天裝
 
 function Log($text) {
     $line = "{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $text
@@ -61,14 +62,30 @@ function ScheduleOk {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $task -or -not (Test-Path $Self)) { return $false }
     if (-not (($task.Actions | Select-Object -First 1).Arguments -like "*$Self*")) { return $false }
-    return -not ($task.Triggers | Where-Object { $_.Repetition -and $_.Repetition.Interval })
+    if ($task.Triggers | Where-Object { $_.Repetition -and $_.Repetition.Interval }) { return $false }
+    # 每天的時間改過（舊版 10:47）就重建排程。
+    $daily = $task.Triggers | Where-Object { $_.CimClass.CimClassName -eq "MSFT_TaskDailyTrigger" } | Select-Object -First 1
+    return [bool]($daily -and $daily.StartBoundary -like "*T$($DailyAt):00*")
+}
+
+# 不經 API 查最新 Release 的標籤（github.com/…/releases/latest 會轉址到 /releases/tag/vX）。
+# 沒登入的 GitHub API 每小時有次數限制（曾出現 403），大多數「已經是最新」的檢查用這個就夠，不呼叫 API。
+function LatestTag {
+    try {
+        $req = [Net.HttpWebRequest]::Create("https://github.com/$Repo/releases/latest")
+        $req.Method = "HEAD"; $req.AllowAutoRedirect = $false; $req.UserAgent = "0c-ime-mod"; $req.Timeout = 30000
+        $resp = $req.GetResponse()
+        try { $loc = $resp.Headers["Location"] } finally { $resp.Close() }
+        if ($loc -match '/releases/tag/v([^/?#]+)$') { return $Matches[1] }
+    } catch {}
+    return $null
 }
 
 # 把（已核對雜湊的）腳本放進 Program Files，建立每天的排程，並清掉舊版留在使用者資料夾的檔案。
 function InstallSchedule($script) {
     Copy-Item $script $Self -Force
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Self`" -Auto"
-    $daily = New-ScheduledTaskTrigger -Daily -At "10:47"   # GitHub 每天 10:17 編譯，30 分鐘後檢查
+    $daily = New-ScheduledTaskTrigger -Daily -At $DailyAt
     $logon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
@@ -107,6 +124,9 @@ function Main {
     }
 
     $installed = InstalledVersion
+
+    # 自動檢查：已經是最新的改裝版、排程也是新設定時，不呼叫 API 就結束。
+    if ($Auto -and $installed -and (LatestTag) -eq $installed -and (ScheduleOk)) { return }
 
     # 開機剛登入時網路可能還沒好：自動更新最多等 3 分鐘再放棄。
     $release = $null
@@ -147,7 +167,7 @@ function Main {
     try {
         if ($schedule) {
             InstallSchedule (Fetch $release "install-mod.ps1" $work)
-            if (-not $Auto) { Log "排程已設定：每天 10:47 與登入時檢查改裝版更新" }
+            if (-not $Auto) { Log "排程已設定：每天 $DailyAt 與登入時檢查改裝版更新" }
         }
         if ($install) {
             Log "安裝改裝版 $latest（目前 $installed）"

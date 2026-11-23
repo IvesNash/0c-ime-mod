@@ -1,9 +1,9 @@
 name: 編譯改裝版
 
-# 每天檢查官方 0c-biggo/0c-ime 的最新版本；還沒有對應的改裝版就套用 patches/ 編譯，發布成 Release。
+# 每 4 小時檢查官方 0c-biggo/0c-ime 的最新版本（已有對應 Release 就略過）；還沒有對應的改裝版就套用 patches/ 編譯，發布成 Release。
 on:
   schedule:
-    - cron: "17 2 * * *" # 台灣時間每天 10:17
+    - cron: "17 */4 * * *" # 每 4 小時（GitHub 排程常延遲數小時，多跑幾次讓官方新版當天就有改裝版）
   workflow_dispatch:
     inputs:
       force:
