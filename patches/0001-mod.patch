@@ -1,4 +1,4 @@
-From 49b2197afa1b35ba66da3b692630767a11e36813 Mon Sep 17 00:00:00 2001
+From b294e260bbbb6de35ab2787aaf305793c37e8753 Mon Sep 17 00:00:00 2001
 From: 0c-ime-mod <mod@localhost>
 Date: Sat, 7 Nov 2026 11:49:59 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E8=A3=9D=EF=BC=9A=E5=88=87=E6=8F=9B?=
@@ -18,14 +18,14 @@ Content-Transfer-Encoding: 8bit
  core/session/mixed.go                     |   4 +
  core/session/mod_mixed.go                 |  51 ++++++++
  core/session/mod_mixed_test.go            |  39 ++++++
- core/session/mod_toggle.go                |  22 ++++
+ core/session/mod_toggle.go                |  23 ++++
  core/session/mod_toggle_test.go           |  84 +++++++++++++
  core/session/session.go                   |   6 +
  internal/settings/mod.go                  | 137 ++++++++++++++++++++++
  internal/settings/mod_test.go             |  56 +++++++++
  internal/settings/settings.go             |   6 +
  internal/settings/settings_test.go        |   2 +-
- platforms/settings/build.rs               |   3 +-
+ platforms/settings/build.rs               |   2 +-
  platforms/settings/capabilities/main.json |   1 +
  platforms/settings/src/main.rs            |   4 +-
  platforms/settings/src/modapps.rs         |  57 +++++++++
@@ -85,7 +85,7 @@ index 532a275..db495bf 100644
  	srv.Info["english_pack"] = eng.EnglishPack
  	if eng.EnglishPack == "" {
 diff --git a/cmd/0c-update/main.go b/cmd/0c-update/main.go
-index 9628877..e14c684 100644
+index 7e1e214..385ae2b 100644
 --- a/cmd/0c-update/main.go
 +++ b/cmd/0c-update/main.go
 @@ -111,6 +111,9 @@ func listSettings(w io.Writer, r settings.Report, path string) {
@@ -99,30 +99,30 @@ index 9628877..e14c684 100644
  
  func isJSONFlag(arg string) bool { return arg == "-json" || arg == "--json" }
 diff --git a/core/engine/engine.go b/core/engine/engine.go
-index 582065b..cb255d5 100644
+index e8e171d..5a91757 100644
 --- a/core/engine/engine.go
 +++ b/core/engine/engine.go
-@@ -50,6 +50,7 @@ type Engine struct {
- 	Abbreviation          bool              // 聲調選填時只打聲母或介音也能選字；只在 Toneless 時作用。
+@@ -51,6 +51,7 @@ type Engine struct {
  	MixedWithToneless     bool              // 聲調選填與混打共存（手機）：注音鍵走聲調選填，實體按鍵走混打。
+ 	NineSegment           bool              // 注音九宮格「自動切字」（手機，預設關）：九宮格的鍵不必按聲調鍵，由核心切音節。
  	EnglishAutocomplete   bool
 +	EndOnToggle           bool                // 0c-ime-mod：切換中英時結束組字
  	MixedInput            bool                // opt-in bilingual keys; disabled preserves legacy behavior.
  	English               *english.Dictionary // nil uses the authored prototype vocabulary.
  	EnglishPack           string              // host-supplied pack version for diagnostics; empty means prototype.
-@@ -169,6 +170,7 @@ func (e *Engine) OpenSession() uint64 {
- 	e.sessions[e.next].Abbreviation = e.Abbreviation
+@@ -171,6 +172,7 @@ func (e *Engine) OpenSession() uint64 {
  	e.sessions[e.next].MixedWithToneless = e.MixedWithToneless
+ 	e.sessions[e.next].NineSegment = e.NineSegment
  	e.sessions[e.next].EnglishAutocomplete = e.EnglishAutocomplete
 +	e.sessions[e.next].EndOnToggle = e.EndOnToggle // 0c-ime-mod
  	e.sessions[e.next].MixedInput = e.MixedInput
  	e.sessions[e.next].EmojiShortcut = e.EmojiShortcut
  	e.sessions[e.next].EmojiEqualsFirst = e.EmojiEqualsFirst
 diff --git a/core/session/mixed.go b/core/session/mixed.go
-index c4cc119..da2b526 100644
+index f1329f9..d1f06b9 100644
 --- a/core/session/mixed.go
 +++ b/core/session/mixed.go
-@@ -648,6 +648,10 @@ func (s *Session) mixedBoundary(raw, key string, tone rune) (int, zhuyin.Syllabl
+@@ -665,6 +665,10 @@ func (s *Session) mixedBoundary(raw, key string, tone rune) (int, zhuyin.Syllabl
  	if best > 0 {
  		return best, bestSyl, true
  	}
@@ -237,10 +237,10 @@ index 0000000..2c226d3
 +}
 diff --git a/core/session/mod_toggle.go b/core/session/mod_toggle.go
 new file mode 100644
-index 0000000..e76d650
+index 0000000..84c98f1
 --- /dev/null
 +++ b/core/session/mod_toggle.go
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,23 @@
 +package session
 +
 +// 0c-ime-mod：切換中英時結束組字。
@@ -255,6 +255,7 @@ index 0000000..e76d650
 +func (s *Session) modEndOnToggle() string {
 +	s.finishUntoned() // 同官方 setMode／commitComposed：聲調選填的完整音節不當成打到一半（#150）
 +	s.nineKeys = nil  // 同官方 setMode：九宮格組不成音節的鍵一起清掉
++	s.pyKeys = ""     // 同官方 setMode：漢語拼音（0.2.15）finishUntoned 已收完，這裡只是保險
 +	s.clearPendingZhuyin()
 +	s.cand = nil
 +	s.toggleStash = nil
@@ -354,7 +355,7 @@ index 0000000..49d42f0
 +	}
 +}
 diff --git a/core/session/session.go b/core/session/session.go
-index 9cda663..da90045 100644
+index ebb0a69..ed57f9a 100644
 --- a/core/session/session.go
 +++ b/core/session/session.go
 @@ -128,6 +128,7 @@ type Session struct {
@@ -365,7 +366,7 @@ index 9cda663..da90045 100644
  	MixedInput            bool
  	English               *english.Dictionary
  	EmojiShortcut         string
-@@ -496,6 +497,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
+@@ -538,6 +539,11 @@ func (s *Session) Handle(r proto.Request) proto.Snapshot {
  		}
  		// 使用者自己切換或外殼設定模式之後，關掉 Caps Lock 不再改變模式（#173）。
  		s.capsEnglish = false
@@ -583,10 +584,10 @@ index 0000000..69c2638
 +	}
 +}
 diff --git a/internal/settings/settings.go b/internal/settings/settings.go
-index f220efe..8f424c3 100644
+index e1a4fe4..bb346b3 100644
 --- a/internal/settings/settings.go
 +++ b/internal/settings/settings.go
-@@ -566,6 +566,8 @@ func (s Settings) notes() []string {
+@@ -567,6 +567,8 @@ func (s Settings) notes() []string {
  	if s.extra != "" {
  		_ = json.Unmarshal([]byte(s.extra), &kept)
  	}
@@ -595,7 +596,7 @@ index f220efe..8f424c3 100644
  	for _, key := range []string{"selection", "punctuation", "document_context", "mixed_input", "english_autocomplete", "left_shift", "esc_clear", "space_selects", "candidate_cursor", "advance_after_select", "candidate_layout", "emoji_shortcut", "emoji_equals_first", "keyboard_layout", "selection_keys", "toggle_key", "shift_tap_ms", "mode_memory", "start_mode", "output_simplified", "simplified_hotkey", "ctrl_punctuation", "shift_symbol_halfwidth", "all_symbols_halfwidth", "cjk_latin_space", "zhuyin_error_hint", "personal_learning", "caps_lock_english", "toneless"} {
  		if raw, ok := kept[key]; ok {
  			out = append(out, fmt.Sprintf("%s：本版不認得 %s，暫用預設值，存檔時保留原值", strings.ReplaceAll(key, "_", "-"), raw))
-@@ -993,6 +995,7 @@ func specs() []spec {
+@@ -1002,6 +1004,7 @@ func specs() []spec {
  		r := r
  		out = append(out, spec{r.key, r.label, r.description, r.get(inputstyleDefaultRules()), r.values, func(s Settings) string { return r.get(s.ProfileRules()) }})
  	}
@@ -603,7 +604,7 @@ index f220efe..8f424c3 100644
  	return out
  }
  
-@@ -1253,6 +1256,9 @@ func (s *Settings) set(key, value string) error {
+@@ -1263,6 +1266,9 @@ func (s *Settings) set(key, value string) error {
  	if s.profileLocked(key) {
  		return &SetError{Code: "locked_by_profile", Key: key, Msg: "此項由選用的輸入習慣固定；請先複製成自訂"}
  	}
@@ -627,32 +628,32 @@ index 60e0ee2..6935fe2 100644
  		want++ // caps-lock-english（#173）只有 Windows、Linux
  	}
 diff --git a/platforms/settings/build.rs b/platforms/settings/build.rs
-index 119e672..a97d249 100644
+index db9528b..8ecb2e8 100644
 --- a/platforms/settings/build.rs
 +++ b/platforms/settings/build.rs
-@@ -1,6 +1,7 @@
+@@ -1,7 +1,7 @@
  // 只有下列指令能從前端呼叫；其他（含 shell、檔案系統）一律不存在。
  const COMMANDS: &[&str] = &["app_info", "get_status", "get_settings", "set_settings", "check_update", "download_update", "install_update", "export_summary",
--    "profile_command", "vocab_request", "export_vocab", "api_command", "vocab_watch", "vocab_unwatch", "models_command", "open_url", "personal_command"];
-+    "profile_command", "vocab_request", "export_vocab", "api_command", "vocab_watch", "vocab_unwatch", "models_command", "open_url", "personal_command",
-+    "list_window_apps" /* 0c-ime-mod */];
+     "profile_command", "vocab_request", "export_vocab", "api_command", "vocab_watch", "vocab_unwatch", "models_command", "open_url", "personal_command",
+-    "set_update_mode"];
++    "set_update_mode", "list_window_apps" /* 0c-ime-mod */];
  
  fn main() {
      tauri_build::try_build(
 diff --git a/platforms/settings/capabilities/main.json b/platforms/settings/capabilities/main.json
-index 2604628..35c4c39 100644
+index 53466b0..19b26ff 100644
 --- a/platforms/settings/capabilities/main.json
 +++ b/platforms/settings/capabilities/main.json
-@@ -21,6 +21,7 @@
-     "allow-models-command",
+@@ -22,6 +22,7 @@
      "allow-open-url",
      "allow-personal-command",
+     "allow-set-update-mode",
 +    "allow-list-window-apps",
      "core:event:allow-listen",
      "core:event:allow-unlisten"
    ]
 diff --git a/platforms/settings/src/main.rs b/platforms/settings/src/main.rs
-index ccc3733..3b9e49e 100644
+index 4511d46..3ec43eb 100644
 --- a/platforms/settings/src/main.rs
 +++ b/platforms/settings/src/main.rs
 @@ -4,6 +4,7 @@
@@ -663,12 +664,12 @@ index ccc3733..3b9e49e 100644
  mod updater;
  mod watch;
  
-@@ -333,7 +334,8 @@ fn main() {
+@@ -339,7 +340,8 @@ fn main() {
          .invoke_handler(tauri::generate_handler![
              app_info, get_status, get_settings, set_settings, check_update, download_update, install_update, export_summary,
              profile_command, vocab_request, export_vocab, api_command, vocab_watch, vocab_unwatch, models_command, open_url,
--            personal_command
-+            personal_command,
+-            personal_command, set_update_mode
++            personal_command, set_update_mode,
 +            modapps::list_window_apps // 0c-ime-mod
          ])
          .setup(move |app| {
@@ -737,7 +738,7 @@ index 0000000..9623d5a
 +    }
 +}
 diff --git a/platforms/settings/src/updater.rs b/platforms/settings/src/updater.rs
-index b3b1e9d..ca6be9a 100644
+index 37d5a31..b132208 100644
 --- a/platforms/settings/src/updater.rs
 +++ b/platforms/settings/src/updater.rs
 @@ -105,6 +105,15 @@ fn valid_value(value: &str) -> bool {
@@ -766,10 +767,10 @@ index b3b1e9d..ca6be9a 100644
          }
      }
 diff --git a/platforms/settings/ui/app.js b/platforms/settings/ui/app.js
-index 4241e6c..ba4f6dd 100644
+index a734488..8490644 100644
 --- a/platforms/settings/ui/app.js
 +++ b/platforms/settings/ui/app.js
-@@ -543,7 +543,8 @@
+@@ -572,7 +572,8 @@
      const emoji = items.find((item) => item.key === 'emoji-shortcut');
      const equalsFirst = items.find((item) => item.key === 'emoji-equals-first');
      const order = (item) => (spec.keys.includes(item.key) ? spec.keys.indexOf(item.key) : spec.keys.length);
@@ -779,7 +780,7 @@ index 4241e6c..ba4f6dd 100644
        .map((item, i) => [order(item), i, item]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , item]) => item);
      const rows = mine.map((item) => {
        const parent = itemRow(item, locked ||
-@@ -554,6 +555,7 @@
+@@ -583,6 +584,7 @@
        return h('div', { class: 'setting-group', role: 'group', 'aria-labelledby': 'label-' + item.key }, parent, child);
      });
      if (rows.length) root.append(h('div', { class: 'card' }, ...rows));
@@ -918,7 +919,7 @@ index 0000000..be45385
 +  window.ZcMod = { keys: KEYS, render };
 +})();
 diff --git a/platforms/windows/tsf/src/lib.rs b/platforms/windows/tsf/src/lib.rs
-index bf9d458..4a1b020 100644
+index 420ac82..70f99df 100644
 --- a/platforms/windows/tsf/src/lib.rs
 +++ b/platforms/windows/tsf/src/lib.rs
 @@ -32,6 +32,7 @@ mod msctf;
@@ -967,7 +968,7 @@ index 0000000..e90c770
 +    }
 +}
 diff --git a/platforms/windows/tsf/src/session.rs b/platforms/windows/tsf/src/session.rs
-index 8b60c1a..47afbec 100644
+index f1bbd6e..5d99704 100644
 --- a/platforms/windows/tsf/src/session.rs
 +++ b/platforms/windows/tsf/src/session.rs
 @@ -164,6 +164,8 @@ pub struct Session {
